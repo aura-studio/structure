@@ -27,12 +27,16 @@ go get github.com/aura-studio/structure/v2
 structure          门面：Parse / Encode / Convert / ParseFormat，按格式分派
 ├── node           数据模型：Node、OrderedMap、承载阶梯、深度与合法性校验、哨兵错误
 ├── format         格式枚举与 ParseError（不 import node，两个独立的根）
-└── codec
-    ├── json  yaml  toml  lua  python  js          每个包一对 Parse / Encode
-    └── internal/emit                              缩进等编码器共用的小工具
+├── codec
+│   ├── json  yaml  toml  lua  python  js          每个包一对 Parse / Encode
+│   └── internal/emit                              缩进等编码器共用的小工具
+├── internal/nodetest                              各包共用的夹具与深嵌套生成器
+└── tests                                          门面的测试与 fuzz 语料
 ```
 
 依赖是单向的：`node` 与 `format` 互不相识，`codec/*` 依赖两者，门面依赖全部。唯一一条 codec 到 codec 的边是 `codec/js` → `codec/json`（JS 编码器复用 JSON 渲染器，两边共用同一套转义，避免各自漂移）。
+
+`tests` 是一个独立的测试包，本身不含任何库代码，也没有任何包 import 它。它只能通过公开面触达门面，所以它同时充当门面 API 的可用性检验：任何一处该导出而没导出的东西，在这里会直接编译不过。
 
 门面里的每个导出名都是**类型别名**或一行转发，不是新定义的类型：
 
@@ -150,7 +154,9 @@ bash scripts/coverage.sh   # 覆盖率门禁（默认 95%）
 go test -bench=. ./...     # 基准
 ```
 
-测试按符号归属分布：某个断言测什么符号，就放在那个符号所在的包里。`node` 的承载与校验测试在 `node/`，`format` 的枚举与位置计算在 `format/`，每种格式的解析/编码分支在 `codec/<格式>/`，其中依赖未导出符号的少数用例（如 TOML 的游标编码、YAML 的 `plainSafe`、各编码器 `validate` 之后不可达的防御分支）用同包测试直接驱动。根包只留门面自己的契约：跨格式一致性、格式归属、以及 `Parse`/`Encode` 两端的整篇拒绝。夹具集中在 `internal/nodetest`，各包共用。
+测试按符号归属分布：某个断言测什么符号，就放在那个符号所在的包里。`node` 的承载与校验测试在 `node/`，`format` 的枚举与位置计算在 `format/`，每种格式的解析/编码分支在 `codec/<格式>/`，其中依赖未导出符号的少数用例（如 TOML 的游标编码、YAML 的 `plainSafe`、各编码器 `validate` 之后不可达的防御分支）用同包测试直接驱动。夹具集中在 `internal/nodetest`，各包共用。
+
+门面自己的契约——跨格式一致性、格式归属、`Parse`/`Encode` 两端的整篇拒绝——放在 `tests/`。根包目录下没有测试文件，所以 `structure.go` 的覆盖率靠 `tests/` 经 `-coverpkg=./...` 回填；`go test ./...` 里根包显示 `[no test files]` 是预期的。这样做的代价是门面的未导出符号不能再被测试直接调用，收益是这些断言只能走公开面，与真实调用者同路。
 
 测试面：
 
@@ -158,7 +164,7 @@ go test -bench=. ./...     # 基准
 - **Round-trip**：每格式 `Parse(Encode(n))` 深等值。比较器 `nodeEqual` 对保序格式逐位置比键，对无序格式只比键值；浮点按位比较且 NaN==NaN；整数跨 `int64`/`uint64`/`*big.Int` 承载做数值比较。
 - **等价链**：`JSON→YAML→TOML→JSON ≡ JSON→TOML→JSON`；另有 `JSON→Lua→JSON` 一条，用无序比较验证丢序格式仍然保值。
 - **错误面**：每格式的非法语法、顶层标量、超深（10001 层 → `ErrTooDeep`，1000 层通过）、重复键，以及各格式特有的拒绝项。
-- **Fuzz**：`FuzzParse`（断言永不 panic、根必为容器、返回的 Node 通过 `validate`）与 `FuzzRoundTrip`（Encode→Parse→深等值）；`testdata/fuzz/FuzzParse/` 每格式 ≥3 条真实种子。种子的第一个字节是格式选择器，按 `Format` 序数索引，所以序数只增不改（移除 XML 时做过一次紧凑重排，语料在同一个提交里同步改了选择字节；`format` 包有测试把序数钉死）。
+- **Fuzz**：`FuzzParse`（断言永不 panic、根必为容器、返回的 Node 通过 `validate`）与 `FuzzRoundTrip`（Encode→Parse→深等值）；`tests/testdata/fuzz/FuzzParse/` 每格式 ≥3 条真实种子（语料按包目录定位，所以它跟着测试一起放在 `tests/` 下）。种子的第一个字节是格式选择器，按 `Format` 序数索引，所以序数只增不改（移除 XML 时做过一次紧凑重排，语料在同一个提交里同步改了选择字节；`format` 包有测试把序数钉死）。
 - **Benchmark**：各格式 Parse/Encode 与代表性 Convert 路径，`b.Loop()` + `ReportAllocs` + `SetBytes`。
 
 覆盖率门禁默认 95%，可用环境变量覆盖：

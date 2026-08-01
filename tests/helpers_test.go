@@ -1,8 +1,9 @@
-package structure
+package tests
 
 import (
 	"testing"
 
+	structure "github.com/aura-studio/structure/v2"
 	"github.com/aura-studio/structure/v2/format"
 	"github.com/aura-studio/structure/v2/internal/nodetest"
 	"github.com/aura-studio/structure/v2/node"
@@ -12,6 +13,44 @@ import (
 // own tests can share them. What follows are one-line forwarders under the names
 // the root tests already used, plus the two helpers that genuinely belong here
 // because they need the facade's format-dispatching Parse/Encode.
+
+// These tests live in their own package, one directory down, so they reach the
+// facade the way any caller does: through its exported API only. The forwarders
+// below re-bind that API to the bare names the assertions already used, which
+// keeps the move a move — no assertion changed shape just to gain a qualifier.
+// Anything NOT reachable this way is deliberately absent: the facade's
+// unexported firstInvalidUTF8 is now exercised through Parse, which is the only
+// way a caller can reach it anyway.
+type (
+	Node       = structure.Node
+	OrderedMap = structure.OrderedMap
+	Format     = structure.Format
+	ParseError = structure.ParseError
+)
+
+const (
+	JSON   = structure.JSON
+	YAML   = structure.YAML
+	TOML   = structure.TOML
+	Lua    = structure.Lua
+	Python = structure.Python
+	JS     = structure.JS
+)
+
+var (
+	ErrUnsupportedStructure = structure.ErrUnsupportedStructure
+	ErrTooDeep              = structure.ErrTooDeep
+	ErrTopLevelScalar       = structure.ErrTopLevelScalar
+	ErrDuplicateKey         = structure.ErrDuplicateKey
+)
+
+func Parse(input string, f Format) (Node, error) { return structure.Parse(input, f) }
+func Encode(n Node, f Format) (string, error)    { return structure.Encode(n, f) }
+func Convert(in string, from, to Format) (string, error) {
+	return structure.Convert(in, from, to)
+}
+func ParseFormat(s string) (Format, error) { return structure.ParseFormat(s) }
+func NewOrderedMap() *OrderedMap           { return structure.NewOrderedMap() }
 
 // maxDepth mirrors node.MaxDepth for the tests that probe the limit.
 const maxDepth = node.MaxDepth

@@ -1,4 +1,4 @@
-package structure
+package tests
 
 import (
 	"errors"
@@ -97,12 +97,17 @@ func TestInvalidUTF8IsRejectedAtBothBoundaries(t *testing.T) {
 	if err := validate(arr(stray)); err == nil {
 		t.Error("validate accepted an invalid UTF-8 array element")
 	}
-	if off := firstInvalidUTF8("ok"); off != -1 {
-		t.Errorf("firstInvalidUTF8(valid) = %d, want -1", off)
-	}
-	// A truncated multi-byte prefix is invalid but decodes with size > 1 only
-	// for genuine runes; the scan must still land on the offending offset.
-	if got := firstInvalidUTF8("ab" + string([]byte{0xe4, 0xb8})); got != 2 {
-		t.Errorf("firstInvalidUTF8(truncated) = %d, want 2", got)
+	// A truncated multi-byte prefix is invalid, but unlike a stray continuation
+	// byte it is the START of a legal encoding, so a scan that trusted
+	// DecodeRuneInString's size would step over it. The offending byte must still
+	// be the one reported: offset 2 with no newline before it is column 3. This
+	// used to call the facade's unexported scanner directly; driving it through
+	// Parse is the only route a caller has, and it pins the position too.
+	if _, err := Parse("ab"+string([]byte{0xe4, 0xb8}), JSON); !errors.As(err, &pe) {
+		t.Errorf("truncated UTF-8 prefix: err = %v (%T), want a *ParseError", err, err)
+	} else if pe.Line != 1 || pe.Column != 3 {
+		t.Errorf("truncated UTF-8 reported at line %d, col %d, want 1,3", pe.Line, pe.Column)
+	} else if !strings.Contains(pe.Msg, "not valid UTF-8") {
+		t.Errorf("truncated UTF-8 message = %q, want the UTF-8 rejection", pe.Msg)
 	}
 }

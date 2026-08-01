@@ -1,4 +1,4 @@
-package structure
+package tests
 
 import (
 	"errors"
@@ -29,6 +29,27 @@ func TestConvertDispatchAndConcurrency(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// ParseFormat is the facade's only string-to-Format entry point, and it had no
+// test at all until the move surfaced it as the one facade function at 0%
+// coverage. The alias matrix itself is pinned in package format; what belongs
+// here is that the forwarder is wired to it and hands back a value the facade's
+// own Parse accepts, which is the whole reason it returns Format and not an int.
+func TestParseFormatForwardsAndFeedsParse(t *testing.T) {
+	f, err := ParseFormat("YML")
+	if err != nil {
+		t.Fatalf("ParseFormat(YML): %v", err)
+	}
+	if f != YAML {
+		t.Fatalf("ParseFormat(YML) = %v, want yaml", f)
+	}
+	if _, err := Parse("a: 1\n", f); err != nil {
+		t.Fatalf("Parse with the resolved format: %v", err)
+	}
+	if _, err := ParseFormat("csv"); err == nil {
+		t.Error("ParseFormat accepted an unknown name")
 	}
 }
 
