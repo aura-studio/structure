@@ -23,8 +23,8 @@ const MsgPrefix = "structure: "
 // and lives in package format alongside ParseError.
 var (
 	// ErrUnsupportedStructure reports that a Node shape cannot be represented
-	// in the target format (for example a top-level array encoded as TOML or
-	// XML). It wraps errors.ErrUnsupported.
+	// in the target format (for example a top-level array encoded as TOML).
+	// It wraps errors.ErrUnsupported.
 	ErrUnsupportedStructure = fmt.Errorf(MsgPrefix+"unsupported node shape for target format: %w", errors.ErrUnsupported)
 
 	// ErrTooDeep reports nesting deeper than MaxDepth (10000). Parsers return

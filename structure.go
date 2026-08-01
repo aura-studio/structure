@@ -1,5 +1,5 @@
-// Package structure converts structured data between seven text formats —
-// JSON, XML, YAML, TOML, Lua, Python and JavaScript — with a single call:
+// Package structure converts structured data between six text formats —
+// JSON, YAML, TOML, Lua, Python and JavaScript — with a single call:
 //
 //	out, err := structure.Convert(input, structure.JSON, structure.YAML)
 //
@@ -19,11 +19,9 @@
 // # Format notes
 //
 // Lua, Python and JavaScript accept literal subsets only and never execute
-// code (AST-whitelisted parsing). XML maps attributes to "@name" keys and
-// text to "#text", keeps values as strings, and requires one root element.
-// TOML and XML cannot represent top-level arrays (ErrUnsupportedStructure).
-// NaN/±Inf are encodable only to YAML and TOML. See the README for the full
-// capability matrix and known limitations.
+// code (AST-whitelisted parsing). TOML cannot represent a top-level array or a
+// nil value (ErrUnsupportedStructure). NaN/±Inf are encodable only to YAML and
+// TOML. See the README for the full capability matrix and known limitations.
 //
 // # Package layout
 //
@@ -50,7 +48,6 @@ import (
 	"github.com/aura-studio/structure/v2/codec/lua"
 	"github.com/aura-studio/structure/v2/codec/python"
 	"github.com/aura-studio/structure/v2/codec/toml"
-	"github.com/aura-studio/structure/v2/codec/xml"
 	"github.com/aura-studio/structure/v2/codec/yaml"
 	"github.com/aura-studio/structure/v2/format"
 	"github.com/aura-studio/structure/v2/node"
@@ -83,16 +80,15 @@ type OrderedMap = node.OrderedMap
 // NewOrderedMap returns an empty OrderedMap ready for use.
 func NewOrderedMap() *OrderedMap { return node.NewOrderedMap() }
 
-// Format identifies one of the seven supported data formats. It is an alias for
+// Format identifies one of the six supported data formats. It is an alias for
 // [format.Format].
 type Format = format.Format
 
-// The seven supported formats. These are aliases of the [format] package's
+// The six supported formats. These are aliases of the [format] package's
 // constants, so the ordinals match exactly; the committed fuzz corpus depends on
 // them, so they must never be renumbered.
 const (
 	JSON   = format.JSON
-	XML    = format.XML
 	YAML   = format.YAML
 	TOML   = format.TOML
 	Lua    = format.Lua
@@ -110,7 +106,7 @@ type ParseError = format.ParseError
 // was built from.
 var (
 	// ErrUnsupportedStructure reports a Node shape the target format cannot
-	// represent (a top-level array for TOML/XML, nil for TOML, an empty array for
+	// represent (a top-level array for TOML, nil for TOML, an empty array for
 	// Lua). It wraps errors.ErrUnsupported.
 	ErrUnsupportedStructure = node.ErrUnsupportedStructure
 
@@ -146,8 +142,6 @@ func Parse(input string, f Format) (Node, error) {
 	switch f {
 	case JSON:
 		n, err = json.Parse(input)
-	case XML:
-		n, err = xml.Parse(input)
 	case YAML:
 		n, err = yaml.Parse(input)
 	case TOML:
@@ -188,8 +182,6 @@ func Encode(n Node, f Format) (string, error) {
 	switch f {
 	case JSON:
 		return json.Encode(n)
-	case XML:
-		return xml.Encode(n)
 	case YAML:
 		return yaml.Encode(n)
 	case TOML:

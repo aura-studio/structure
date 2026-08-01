@@ -15,7 +15,6 @@ func TestRoundTrips(t *testing.T) {
 		f := f
 		t.Run(f.String()+"_array", func(t *testing.T) { roundTrip(t, f, fixtureArray()) })
 	}
-	roundTrip(t, XML, om("root", fixtureStringsMap()))
 	for _, f := range []Format{YAML, TOML} {
 		f := f
 		t.Run(f.String()+"_special", func(t *testing.T) { roundTrip(t, f, om("nan", math.NaN(), "pos", math.Inf(1), "neg", math.Inf(-1))) })
@@ -53,18 +52,21 @@ func TestEquivalentChains(t *testing.T) {
 	if !nodeEqual(an, bn, true) {
 		t.Fatalf("chains differ\n%s\n%s", a, b)
 	}
-	xmlStart := `{"root":{"a":"x","items":["1","2"]}}`
-	x, e := Convert(xmlStart, JSON, XML)
+	// A string-only document survives the order-losing formats too: TOML sorts
+	// inline-table keys and Lua sorts its hash segment, so this chain pins that
+	// the VALUES arrive intact even where the order guarantee is waived.
+	strStart := `{"a":"x","items":["1","2"],"t":{"k":"v"}}`
+	viaLua, e := Convert(strStart, JSON, Lua)
 	if e != nil {
 		t.Fatal(e)
 	}
-	back, e := Convert(x, XML, JSON)
+	back, e := Convert(viaLua, Lua, JSON)
 	if e != nil {
 		t.Fatal(e)
 	}
-	orig, _ := Parse(xmlStart, JSON)
+	orig, _ := Parse(strStart, JSON)
 	got, _ := Parse(back, JSON)
-	if !nodeEqual(orig, got, true) {
-		t.Fatalf("XML chain mismatch\n%s", back)
+	if !nodeEqual(orig, got, false) {
+		t.Fatalf("Lua chain mismatch\n%s", back)
 	}
 }

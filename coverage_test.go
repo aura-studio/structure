@@ -22,7 +22,6 @@ func TestParseAndEncodeDepthGuards(t *testing.T) {
 		{Lua, deepLua(100)},
 		{Python, deepPython(100)},
 		{JS, deepJS(100)},
-		{XML, deepXML(100)},
 	} {
 		if _, err := Parse(tc.input, tc.f); err != nil {
 			t.Errorf("Parse(%s, 100 levels): %v", tc.f, err)
@@ -38,8 +37,7 @@ func TestParseAndEncodeDepthGuards(t *testing.T) {
 
 // One level past the limit must be ErrTooDeep for every parser, not a stack
 // overflow (which is fatal and cannot be recovered) and not a generic syntax
-// error. XML is absent because its own parse test covers the same boundary
-// directly; YAML is checked separately below.
+// error. YAML is checked separately below.
 func TestParserDepthGuardsAtTheLimit(t *testing.T) {
 	for _, tc := range []struct {
 		f     Format
@@ -50,7 +48,6 @@ func TestParserDepthGuardsAtTheLimit(t *testing.T) {
 		{Python, deepPython(maxDepth + 1)},
 		{JS, deepJS(maxDepth + 1)},
 		{TOML, deepTOML(maxDepth + 1)},
-		{XML, deepXML(maxDepth + 1)},
 	} {
 		if _, err := Parse(tc.input, tc.f); !errors.Is(err, ErrTooDeep) {
 			t.Errorf("%s at %d levels: err = %v, want ErrTooDeep", tc.f, maxDepth+1, err)

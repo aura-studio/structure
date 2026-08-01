@@ -1,6 +1,6 @@
 # structure
 
-在 **JSON / XML / YAML / TOML / Lua / Python / JavaScript** 七种文本格式之间互相转换结构化数据。文本进，文本出，一次调用。
+在 **JSON / YAML / TOML / Lua / Python / JavaScript** 六种文本格式之间互相转换结构化数据。文本进，文本出，一次调用。
 
 ```go
 out, err := structure.Convert(input, structure.JSON, structure.YAML)
@@ -21,14 +21,14 @@ go get github.com/aura-studio/structure/v2
 
 ## 包结构
 
-根包 `structure` 是门面（facade）。数据模型、格式枚举、七个编解码器各自独立成包：
+根包 `structure` 是门面（facade）。数据模型、格式枚举、六个编解码器各自独立成包：
 
 ```
 structure          门面：Parse / Encode / Convert / ParseFormat，按格式分派
 ├── node           数据模型：Node、OrderedMap、承载阶梯、深度与合法性校验、哨兵错误
 ├── format         格式枚举与 ParseError（不 import node，两个独立的根）
 └── codec
-    ├── json  xml  yaml  toml  lua  python  js     每个包一对 Parse / Encode
+    ├── json  yaml  toml  lua  python  js          每个包一对 Parse / Encode
     └── internal/emit                              缩进等编码器共用的小工具
 ```
 
@@ -84,7 +84,7 @@ f, err := structure.ParseFormat("yml") // => structure.YAML
 
 其他 Go 类型一律被 `Encode` 拒绝。文档根必须是映射或数组，裸标量顶层返回 `ErrTopLevelScalar`（这是「不包含纯单值不嵌套结构」的落地）。
 
-输入输出都必须是合法 UTF-8：`Parse` 在分派前校验并给出出错位置，`Encode` 校验字符串值与映射键。七种格式的规范都要求 UTF-8 源文本，而按字节工作的 Python / Lua 解析器会把野字节带进字符串，编码器按 rune 遍历时又会静默替换成 U+FFFD——这条往返静默损坏是 `FuzzRoundTrip` 发现的，现已在两端堵住，语料保留为回归种子。
+输入输出都必须是合法 UTF-8：`Parse` 在分派前校验并给出出错位置，`Encode` 校验字符串值与映射键。六种格式的规范都要求 UTF-8 源文本，而按字节工作的 Python / Lua 解析器会把野字节带进字符串，编码器按 rune 遍历时又会静默替换成 U+FFFD——这条往返静默损坏是 `FuzzRoundTrip` 发现的，现已在两端堵住，语料保留为回归种子。
 
 `OrderedMap` 是 map + 双向链表，`Get`/`Set`/`Delete`/`Len` 均 O(1)，`Set` 已存在的键就地更新不改变位置。它提供 `All() iter.Seq2[string, Node]` 供 range-over-func 遍历，`Clone()` 深拷贝，以及保序的 `MarshalJSON()`。
 
@@ -115,7 +115,6 @@ if errors.As(err, &pe) {
 | JSON | ✅ | ✅ | ❌ | — |
 | YAML | ✅ | ✅ | ✅ | — |
 | TOML | ❌ 根须是表 | ❌ 无 null | ✅ | 整数上限 int64，uint64/big.Int 越界报错 |
-| XML | ❌ 单根元素 | ✅ 空元素 | ❌ | 值一律字符串化 |
 | Lua | ✅ | 数组元素 ❌ / map 键跳过 | ❌ | 哈希段键排序输出 |
 | Python | ✅ | ✅ | ❌ | — |
 | JS | ✅ | ✅ | ❌ | 输出即 JSON 文本 |
@@ -128,36 +127,19 @@ if errors.As(err, &pe) {
 - **YAML**：yaml.v3 的 `yaml.Node` 路线。不支持多文档、锚点、别名、合并键、自定义 tag、`!!binary`。超出 uint64 被 yaml.v3 降级为 `!!float` 的整数会按原文还原成 `*big.Int`。
 - **TOML**：BurntSushi 解析，再用 `MetaData.Keys()` 的文档序把无序 map 回放成有序树（表数组的每个元素靠游标定位，嵌套 `[[a.b]]` 在每个新 `a` 元素里重新计数）。内联表没有可恢复的顺序，按键名排序保证确定性。四种时间类型全部规范化为字符串。
 
-## XML 约定
-
-| 约定 | 说明 |
-|---|---|
-| 属性 | 键名加 `@` 前缀，如 `@id`；`xmlns` 声明保留原形（`@xmlns`、`@xmlns:p`），其余属性只取 Local 名 |
-| 文本 | 键名 `#text`；多段文本拼接；纯空白丢弃 |
-| 同名兄弟 | 第二次出现时合并成 `[]Node` |
-| 单文本元素 | 只有 `#text` 一个键时塌缩成裸字符串 |
-| 注释 / PI / DOCTYPE | 解析时忽略 |
-| 单根 | 解析和编码都强制恰好一个根元素 |
-| 编码 | 输出 `<?xml ...?>` 声明 + 2 空格缩进；混合内容元素（`#text` 与子元素并存）不缩进，因为缩进空白会被解析器折回 `#text`；CDATA 只解码不编码 |
-
-```go
-node, _ := structure.Parse(`<user id="7"><name>Ada</name></user>`, structure.XML)
-// {"user": {"@id": "7", "name": "Ada"}}
-```
-
 ## 已知限制
 
-1. XML 值无类型（全字符串）；命名空间仅保留 Local 名；CDATA 仅解码不编码。混合内容可以往返，代价是这类文档整篇不缩进（缩进是元素内部空白，会被解析器折进 `#text`）。
-2. YAML 不保留注释、锚点、别名、合并键、多文档、自定义 tag、`!!binary`。`%YAML 1.2` 指令被拒绝：yaml.v3 只实现 1.1，吞掉指令按 1.1 解析会静默改变 `y`/`no`、八进制等标量的含义，报错比静默降级安全。
-3. Lua 只支持纯数组表与纯字符串键字典表；按 Lua 5.3 词法解析，不保证 5.4 新语法。
-4. Python dict 键冻结为字符串；不支持 bytes / set / complex / Ellipsis / `\N{name}` / 隐式拼接。
-5. JS 输出即 JSON 文本（是合法的 JS 子集）；数字样键在真实 JS 引擎里会被重排（ECMA-262 §10.1.11.1 的运行时行为，非本库缺陷，生成文本仍按插入序）。
-6. goja 以伪版本固定（上游无 semver tag），其 `ast` 包自述接口可能变更，升级需回归。
-7. yaml.v3 仓库已 archived；v3.0.1 代码稳定、零依赖，仍是事实标准。`OrderedMap` 层已隔离该依赖，长期可评估切换。
-8. TOML 时间值转换后是字符串（语义降级，往返不等型）。
-9. 深度上限 10000 硬编码（对齐标准库 `encoding/json` 与 `encoding/xml` 先例），不可配置。Go 的栈溢出不可 recover，所以这个上限由各解析器显式检查。
-10. 保序只对 JSON / YAML / Python / JS 有语义保证。TOML 表内顺序、XML 属性顺序、Lua 哈希顺序在各自规范里都无意义，本库输出确定但不承诺与输入一致。
-11. 输入输出一律要求合法 UTF-8，不支持其他编码，也不为野字节提供逃逸表示。需要处理二进制请先自行转成 base64 等文本形式。
+1. YAML 不保留注释、锚点、别名、合并键、多文档、自定义 tag、`!!binary`。`%YAML 1.2` 指令被拒绝：yaml.v3 只实现 1.1，吞掉指令按 1.1 解析会静默改变 `y`/`no`、八进制等标量的含义，报错比静默降级安全。
+2. Lua 只支持纯数组表与纯字符串键字典表；按 Lua 5.3 词法解析，不保证 5.4 新语法。
+3. Python dict 键冻结为字符串；不支持 bytes / set / complex / Ellipsis / `\N{name}` / 隐式拼接。
+4. JS 输出即 JSON 文本（是合法的 JS 子集）；数字样键在真实 JS 引擎里会被重排（ECMA-262 §10.1.11.1 的运行时行为，非本库缺陷，生成文本仍按插入序）。
+5. goja 以伪版本固定（上游无 semver tag），其 `ast` 包自述接口可能变更，升级需回归。
+6. yaml.v3 仓库已 archived；v3.0.1 代码稳定、零依赖，仍是事实标准。`OrderedMap` 层已隔离该依赖，长期可评估切换。
+7. TOML 时间值转换后是字符串（语义降级，往返不等型）。
+8. 深度上限 10000 硬编码（对齐标准库 `encoding/json` 与 `encoding/xml` 先例），不可配置。Go 的栈溢出不可 recover，所以这个上限由各解析器显式检查。
+9. 保序只对 JSON / YAML / Python / JS 有语义保证。TOML 表内顺序、Lua 哈希顺序在各自规范里都无意义，本库输出确定但不承诺与输入一致。
+10. 输入输出一律要求合法 UTF-8，不支持其他编码，也不为野字节提供逃逸表示。需要处理二进制请先自行转成 base64 等文本形式。
+11. 不含 XML。XML 的数据模型（属性、混合内容、单根、值无类型）与这里的 Node 模型不同构，硬塞进来只能靠 `@attr`/`#text` 这类约定，往返语义不干净，故整包移除。
 
 ## 测试
 
@@ -172,11 +154,11 @@ go test -bench=. ./...     # 基准
 
 测试面：
 
-- **49 格转换矩阵**：七格式两两互转全组合，共享嵌套/顶层数组/空容器夹具，TOML 与 XML 目标附带顶层数组的错误期望。
+- **36 格转换矩阵**：六格式两两互转全组合，共享嵌套/顶层数组/空容器夹具，TOML 目标附带顶层数组的错误期望。
 - **Round-trip**：每格式 `Parse(Encode(n))` 深等值。比较器 `nodeEqual` 对保序格式逐位置比键，对无序格式只比键值；浮点按位比较且 NaN==NaN；整数跨 `int64`/`uint64`/`*big.Int` 承载做数值比较。
-- **等价链**：`JSON→YAML→TOML→JSON ≡ JSON→TOML→JSON`；XML 链用纯字符串夹具。
+- **等价链**：`JSON→YAML→TOML→JSON ≡ JSON→TOML→JSON`；另有 `JSON→Lua→JSON` 一条，用无序比较验证丢序格式仍然保值。
 - **错误面**：每格式的非法语法、顶层标量、超深（10001 层 → `ErrTooDeep`，1000 层通过）、重复键，以及各格式特有的拒绝项。
-- **Fuzz**：`FuzzParse`（断言永不 panic、根必为容器、返回的 Node 通过 `validate`）与 `FuzzRoundTrip`（Encode→Parse→深等值）；`testdata/fuzz/FuzzParse/` 每格式 ≥3 条真实种子。
+- **Fuzz**：`FuzzParse`（断言永不 panic、根必为容器、返回的 Node 通过 `validate`）与 `FuzzRoundTrip`（Encode→Parse→深等值）；`testdata/fuzz/FuzzParse/` 每格式 ≥3 条真实种子。种子的第一个字节是格式选择器，按 `Format` 序数索引，所以序数只增不改（移除 XML 时做过一次紧凑重排，语料在同一个提交里同步改了选择字节；`format` 包有测试把序数钉死）。
 - **Benchmark**：各格式 Parse/Encode 与代表性 Convert 路径，`b.Loop()` + `ReportAllocs` + `SetBytes`。
 
 覆盖率门禁默认 95%，可用环境变量覆盖：
@@ -194,4 +176,4 @@ COVERAGE_THRESHOLD=97 bash scripts/coverage.sh
 | `github.com/arnodel/golua` | Lua 表达式解析器（纯解析，无 VM） |
 | `github.com/dop251/goja` | JavaScript 解析器（只用 `parser`/`ast`，不启动运行时） |
 
-JSON 与 XML 走标准库，TOML、Lua、Python、JS 的编码器全部手写。
+JSON 走标准库，TOML、Lua、Python、JS 的编码器全部手写。

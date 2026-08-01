@@ -53,19 +53,6 @@ func RichMap() node.Node {
 	)
 }
 
-// StringsMap uses only string values — the fixture for any path that goes
-// through XML (whose values are untyped strings).
-func StringsMap() node.Node {
-	return OM(
-		"title", "hello world",
-		"lang", "go",
-		"inner", OM(
-			"note", "keep <this> & \"that\"",
-			"list", Arr("a", "b", "c"),
-		),
-	)
-}
-
 // Array is a top-level array fixture (JSON/YAML/Lua/Python/JS only).
 func Array() node.Node {
 	return Arr(int64(1), "two", 3.5, true, OM("k", "v"))
@@ -129,18 +116,5 @@ func DeepTOML(n int) string {
 		b.WriteString("]\n")
 	}
 	b.WriteString("x = 1\n")
-	return b.String()
-}
-
-// DeepXML builds n levels of nested XML elements.
-func DeepXML(n int) string {
-	var b strings.Builder
-	for i := 0; i < n; i++ {
-		b.WriteString("<a>")
-	}
-	b.WriteString("x")
-	for i := 0; i < n; i++ {
-		b.WriteString("</a>")
-	}
 	return b.String()
 }

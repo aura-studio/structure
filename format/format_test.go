@@ -10,7 +10,6 @@ import (
 func TestFormatString(t *testing.T) {
 	want := map[format.Format]string{
 		format.JSON:   "json",
-		format.XML:    "xml",
 		format.YAML:   "yaml",
 		format.TOML:   "toml",
 		format.Lua:    "lua",
@@ -54,7 +53,7 @@ func TestParseAliases(t *testing.T) {
 		"python3":    format.Python,
 		"ECMAScript": format.JS,
 		"  json ":    format.JSON, // trimmed
-		"Xml":        format.XML,
+		"Toml":       format.TOML, // mixed case on a canonical name
 	}
 	for in, want := range cases {
 		got, err := format.Parse(in)
@@ -74,7 +73,7 @@ func TestParseUnknown(t *testing.T) {
 		t.Fatal("expected error for unknown format")
 	}
 	msg := err.Error()
-	for _, name := range []string{"json", "xml", "yaml", "toml", "lua", "python", "js", "csv"} {
+	for _, name := range []string{"json", "yaml", "toml", "lua", "python", "js", "csv"} {
 		if !strings.Contains(msg, name) {
 			t.Errorf("error message %q should mention %q", msg, name)
 		}
@@ -83,14 +82,14 @@ func TestParseUnknown(t *testing.T) {
 
 func TestAllCoverage(t *testing.T) {
 	all := format.All()
-	if len(all) != 7 {
-		t.Fatalf("All() has %d entries, want 7", len(all))
+	if len(all) != 6 {
+		t.Fatalf("All() has %d entries, want 6", len(all))
 	}
 	seen := map[format.Format]bool{}
 	for _, f := range all {
 		seen[f] = true
 	}
-	if len(seen) != 7 {
+	if len(seen) != 6 {
 		t.Errorf("All() has duplicates: %v", all)
 	}
 }
@@ -109,11 +108,13 @@ func TestAllReturnsAFreshSlice(t *testing.T) {
 // TestOrdinalsAreStable pins the numeric values of the Format constants. They
 // are a wire format: the committed fuzz corpus under testdata/fuzz/ stores a raw
 // selector byte that indexes this sequence, so renumbering would silently
-// repoint every seed at a different parser.
+// repoint every seed at a different parser. Removing XML did renumber them, and
+// every seed's selector byte was rewritten in that same commit; this test is
+// what makes the next such drift a failure rather than a silent mis-seeding.
 func TestOrdinalsAreStable(t *testing.T) {
 	want := map[format.Format]int{
-		format.JSON: 0, format.XML: 1, format.YAML: 2, format.TOML: 3,
-		format.Lua: 4, format.Python: 5, format.JS: 6,
+		format.JSON: 0, format.YAML: 1, format.TOML: 2,
+		format.Lua: 3, format.Python: 4, format.JS: 5,
 	}
 	for f, ordinal := range want {
 		if int(f) != ordinal {
@@ -127,17 +128,17 @@ func TestOrdinalsAreStable(t *testing.T) {
 
 func TestList(t *testing.T) {
 	got := format.List()
-	if want := "json, xml, yaml, toml, lua, python, js"; got != want {
+	if want := "json, yaml, toml, lua, python, js"; got != want {
 		t.Fatalf("List() = %q, want %q", got, want)
 	}
 }
 
 func TestPreservesOrder(t *testing.T) {
-	// TOML table order, XML attribute order and Lua hash order are unspecified
-	// by their own specifications; the other four must preserve key order.
+	// TOML table order and Lua hash order are unspecified by their own
+	// specifications; the other four must preserve key order.
 	want := map[format.Format]bool{
 		format.JSON: true, format.YAML: true, format.Python: true, format.JS: true,
-		format.XML: false, format.TOML: false, format.Lua: false,
+		format.TOML: false, format.Lua: false,
 	}
 	for f, ordered := range want {
 		if got := format.PreservesOrder(f); got != ordered {

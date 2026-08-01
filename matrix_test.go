@@ -39,16 +39,13 @@ func diffNode(a, b Node, ordered bool, path string) string {
 	return fmt.Sprintf("%s: source=%v (%T) target=%v (%T)", path, a, a, b, b)
 }
 
-func TestConversionMatrix49(t *testing.T) {
-	formats := []Format{JSON, XML, YAML, TOML, Lua, Python, JS}
+func TestConversionMatrix36(t *testing.T) {
+	formats := []Format{JSON, YAML, TOML, Lua, Python, JS}
 	for _, from := range formats {
 		for _, to := range formats {
 			from, to := from, to
 			t.Run(from.String()+"_to_"+to.String(), func(t *testing.T) {
 				fixture := fixtureRichMap()
-				if from == XML || to == XML {
-					fixture = om("root", fixtureStringsMap())
-				}
 				input, err := Encode(fixture, from)
 				if err != nil {
 					t.Fatalf("fixture encode: %v", err)
@@ -81,11 +78,10 @@ func TestTopLevelArrayTargetMatrix(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, to := range []Format{TOML, XML} {
-			_, err := Convert(input, from, to)
-			if !stderrors.Is(err, ErrUnsupportedStructure) || !stderrors.Is(err, errors.ErrUnsupported) {
-				t.Errorf("%s->%s err=%v", from, to, err)
-			}
+		// TOML is now the only target that cannot root a document at an array.
+		_, err = Convert(input, from, TOML)
+		if !stderrors.Is(err, ErrUnsupportedStructure) || !stderrors.Is(err, errors.ErrUnsupported) {
+			t.Errorf("%s->%s err=%v", from, TOML, err)
 		}
 	}
 }

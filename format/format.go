@@ -1,4 +1,4 @@
-// Package format identifies the seven text formats this module converts
+// Package format identifies the six text formats this module converts
 // between, and describes a parse failure in one of them.
 //
 // It is the second root of the module's import graph: like package node it
@@ -20,18 +20,19 @@ import (
 // ParseError and a silent rename would corrupt the public error text.
 const MsgPrefix = "structure: "
 
-// Format identifies one of the seven supported data formats.
+// Format identifies one of the six supported data formats.
 type Format int
 
-// The seven supported formats.
+// The six supported formats.
 //
 // The ordinals are a wire format, not an implementation detail: the committed
 // fuzz corpus under testdata/fuzz/ stores a raw selector byte that indexes this
-// sequence, so a reordering would silently repoint every seed at a different
-// parser. Append only; never renumber.
+// sequence, so a reordering silently repoints every seed at a different parser.
+// Append only; never renumber. The one exception was removing XML before v2 was
+// ever tagged: the sequence was compacted and every seed's selector byte was
+// rewritten in the same commit. Once v2 is released that escape hatch is gone.
 const (
 	JSON Format = iota
-	XML
 	YAML
 	TOML
 	Lua
@@ -41,7 +42,6 @@ const (
 
 var names = [...]string{
 	JSON:   "json",
-	XML:    "xml",
 	YAML:   "yaml",
 	TOML:   "toml",
 	Lua:    "lua",
@@ -51,12 +51,11 @@ var names = [...]string{
 
 // all lists every Format in declaration order. It is unexported and copied by
 // All so the package keeps no exported mutable state.
-var all = [...]Format{JSON, XML, YAML, TOML, Lua, Python, JS}
+var all = [...]Format{JSON, YAML, TOML, Lua, Python, JS}
 
 // aliases maps lowercase aliases (and canonical names) to Formats.
 var aliases = map[string]Format{
 	"json":       JSON,
-	"xml":        XML,
 	"yaml":       YAML,
 	"yml":        YAML,
 	"toml":       TOML,
@@ -105,9 +104,9 @@ func Parse(s string) (Format, error) {
 }
 
 // PreservesOrder reports whether f gives mapping key order a defined meaning.
-// TOML table order, XML attribute order and Lua hash order are all
-// unspecified by their own specifications, so a round trip through those three
-// may reorder keys; the other four must preserve them exactly.
+// TOML table order and Lua hash order are both unspecified by their own
+// specifications, so a round trip through those two may reorder keys; the other
+// four must preserve them exactly.
 func PreservesOrder(f Format) bool {
 	switch f {
 	case JSON, YAML, Python, JS:

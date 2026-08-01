@@ -114,7 +114,7 @@ func Clone(n Node) Node {
 
 // Equal deep-compares two Node trees. When ordered is true, mapping keys must
 // appear in the same order (JSON/YAML/Python/JS round-trips); when false, order
-// is irrelevant (TOML/XML/Lua, whose order is not semantically significant).
+// is irrelevant (TOML/Lua, whose order is not semantically significant).
 // Floats compare bit-exactly with NaN == NaN; int64/uint64/*big.Int compare
 // numerically across carriers.
 func Equal(a, b Node, ordered bool) bool {

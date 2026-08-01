@@ -19,9 +19,8 @@ const maxDepth = node.MaxDepth
 func om(pairs ...any) *OrderedMap { return nodetest.OM(pairs...) }
 func arr(vals ...Node) []Node     { return nodetest.Arr(vals...) }
 
-func fixtureRichMap() Node    { return nodetest.RichMap() }
-func fixtureStringsMap() Node { return nodetest.StringsMap() }
-func fixtureArray() Node      { return nodetest.Array() }
+func fixtureRichMap() Node { return nodetest.RichMap() }
+func fixtureArray() Node   { return nodetest.Array() }
 
 func deepArrays(n int) Node { return nodetest.DeepArrays(n) }
 func deepMaps(n int) Node   { return nodetest.DeepMaps(n) }
@@ -32,7 +31,6 @@ func deepLua(n int) string    { return nodetest.DeepLua(n) }
 func deepPython(n int) string { return nodetest.DeepPython(n) }
 func deepJS(n int) string     { return nodetest.DeepJS(n) }
 func deepTOML(n int) string   { return nodetest.DeepTOML(n) }
-func deepXML(n int) string    { return nodetest.DeepXML(n) }
 
 // nodeEqual forwards to node.Equal, the module's single deep-equality rule.
 func nodeEqual(a, b Node, keyOrder bool) bool { return node.Equal(a, b, keyOrder) }
@@ -45,7 +43,7 @@ func validate(n Node) error { return node.Validate(n) }
 // ordered reports whether format f preserves mapping key order semantically.
 func ordered(f Format) bool { return format.PreservesOrder(f) }
 
-// allFormats lists every supported format, for tests that sweep all seven.
+// allFormats lists every supported format, for tests that sweep all six.
 var allFormats = format.All()
 
 // roundTrip encodes n to f, parses it back, and asserts deep equality. It stays
