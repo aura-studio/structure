@@ -19,6 +19,33 @@ go get github.com/aura-studio/structure/v2
 
 要求 Go 1.25 及以上。
 
+## 包结构
+
+根包 `structure` 是门面（facade）。数据模型、格式枚举、七个编解码器各自独立成包：
+
+```
+structure          门面：Parse / Encode / Convert / ParseFormat，按格式分派
+├── node           数据模型：Node、OrderedMap、承载阶梯、深度与合法性校验、哨兵错误
+├── format         格式枚举与 ParseError（不 import node，两个独立的根）
+└── codec
+    ├── json  xml  yaml  toml  lua  python  js     每个包一对 Parse / Encode
+    └── internal/emit                              缩进等编码器共用的小工具
+```
+
+依赖是单向的：`node` 与 `format` 互不相识，`codec/*` 依赖两者，门面依赖全部。唯一一条 codec 到 codec 的边是 `codec/js` → `codec/json`（JS 编码器复用 JSON 渲染器，两边共用同一套转义，避免各自漂移）。
+
+门面里的每个导出名都是**类型别名**或一行转发，不是新定义的类型：
+
+```go
+type Node = node.Node
+type OrderedMap = node.OrderedMap
+type ParseError = format.ParseError
+```
+
+所以 `structure.OrderedMap` 与 `node.OrderedMap` 是同一个类型，`errors.As` 用两种写法都能匹配，`json.Marshaler` 检测与 type switch 也一致。只用一种格式就直接 import 对应子包，需要按格式分派再用门面。
+
+未来的扩展（比如 merge）落在新的子包里，不动这条依赖链。
+
 ## API
 
 三个导出函数，`Convert` 等于 `Parse` 接 `Encode`：
@@ -140,6 +167,8 @@ go test -race ./...        # 竞态
 bash scripts/coverage.sh   # 覆盖率门禁（默认 95%）
 go test -bench=. ./...     # 基准
 ```
+
+测试按符号归属分布：某个断言测什么符号，就放在那个符号所在的包里。`node` 的承载与校验测试在 `node/`，`format` 的枚举与位置计算在 `format/`，每种格式的解析/编码分支在 `codec/<格式>/`，其中依赖未导出符号的少数用例（如 TOML 的游标编码、YAML 的 `plainSafe`、各编码器 `validate` 之后不可达的防御分支）用同包测试直接驱动。根包只留门面自己的契约：跨格式一致性、格式归属、以及 `Parse`/`Encode` 两端的整篇拒绝。夹具集中在 `internal/nodetest`，各包共用。
 
 测试面：
 

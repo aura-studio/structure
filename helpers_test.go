@@ -1,141 +1,55 @@
 package structure
 
 import (
-	"strings"
 	"testing"
+
+	"github.com/aura-studio/structure/v2/format"
+	"github.com/aura-studio/structure/v2/internal/nodetest"
+	"github.com/aura-studio/structure/v2/node"
 )
 
-// om builds an OrderedMap from alternating key/value pairs.
-func om(pairs ...any) *OrderedMap {
-	m := NewOrderedMap()
-	for i := 0; i+1 < len(pairs); i += 2 {
-		m.Set(pairs[i].(string), pairs[i+1])
-	}
-	return m
-}
+// The fixtures themselves live in internal/nodetest so that the codec packages'
+// own tests can share them. What follows are one-line forwarders under the names
+// the root tests already used, plus the two helpers that genuinely belong here
+// because they need the facade's format-dispatching Parse/Encode.
 
-// arr builds a []Node from values.
-func arr(vals ...Node) []Node { return vals }
+// maxDepth mirrors node.MaxDepth for the tests that probe the limit.
+const maxDepth = node.MaxDepth
 
-// fixtureRichMap is the shared nested fixture for matrix tests: strings,
-// bools, integers, floats, nested maps and arrays of scalars/maps. No nils
-// (TOML/Lua restrictions) and no NaN/Inf (YAML/TOML only).
-func fixtureRichMap() Node {
-	return om(
-		"name", "structure",
-		"count", int64(42),
-		"big", int64(9007199254740993), // 2^53+1: precision witness
-		"ratio", 3.5,
-		"whole", 7.0, // integral float: must survive as float
-		"active", true,
-		"tags", arr("go", "convert"),
-		"nested", om(
-			"level", int64(2),
-			"items", arr(
-				om("id", int64(1), "label", "first"),
-				om("id", int64(2), "label", "second"),
-			),
-		),
-	)
-}
+func om(pairs ...any) *OrderedMap { return nodetest.OM(pairs...) }
+func arr(vals ...Node) []Node     { return nodetest.Arr(vals...) }
 
-// fixtureStringsMap uses only string values — the fixture for any path that
-// goes through XML (whose values are untyped strings).
-func fixtureStringsMap() Node {
-	return om(
-		"title", "hello world",
-		"lang", "go",
-		"inner", om(
-			"note", "keep <this> & \"that\"",
-			"list", arr("a", "b", "c"),
-		),
-	)
-}
+func fixtureRichMap() Node    { return nodetest.RichMap() }
+func fixtureStringsMap() Node { return nodetest.StringsMap() }
+func fixtureArray() Node      { return nodetest.Array() }
 
-// fixtureArray is a top-level array fixture (JSON/YAML/Lua/Python/JS only).
-func fixtureArray() Node {
-	return arr(int64(1), "two", 3.5, true, om("k", "v"))
-}
+func deepArrays(n int) Node { return nodetest.DeepArrays(n) }
+func deepMaps(n int) Node   { return nodetest.DeepMaps(n) }
 
-// deepArrays builds an n-level nested array: [[[...]]].
-func deepArrays(n int) Node {
-	var cur Node = int64(1)
-	for i := 0; i < n; i++ {
-		cur = arr(cur)
-	}
-	return cur
-}
+func deepJSON(n int) string   { return nodetest.DeepJSON(n) }
+func deepYAML(n int) string   { return nodetest.DeepYAML(n) }
+func deepLua(n int) string    { return nodetest.DeepLua(n) }
+func deepPython(n int) string { return nodetest.DeepPython(n) }
+func deepJS(n int) string     { return nodetest.DeepJS(n) }
+func deepTOML(n int) string   { return nodetest.DeepTOML(n) }
+func deepXML(n int) string    { return nodetest.DeepXML(n) }
 
-// deepMaps builds an n-level nested map: {a:{a:{...}}}.
-func deepMaps(n int) Node {
-	inner := om("leaf", int64(1))
-	cur := Node(inner)
-	for i := 0; i < n-1; i++ {
-		cur = om("a", cur)
-	}
-	return cur
-}
+// nodeEqual forwards to node.Equal, the module's single deep-equality rule.
+func nodeEqual(a, b Node, keyOrder bool) bool { return node.Equal(a, b, keyOrder) }
 
-// deepString builds a nesting of n levels for parser depth tests per format.
-func deepJSON(n int) string {
-	return strings.Repeat("[", n) + "1" + strings.Repeat("]", n)
-}
-
-func deepYAML(n int) string {
-	// Flow style nested sequences.
-	return strings.Repeat("[", n) + "1" + strings.Repeat("]", n)
-}
-
-func deepLua(n int) string {
-	return strings.Repeat("{", n) + "1" + strings.Repeat("}", n)
-}
-
-func deepPython(n int) string {
-	return strings.Repeat("[", n) + "1" + strings.Repeat("]", n)
-}
-
-func deepJS(n int) string {
-	return strings.Repeat("[", n) + "1" + strings.Repeat("]", n)
-}
-
-func deepTOML(n int) string {
-	var b strings.Builder
-	for i := 0; i < n; i++ {
-		b.WriteString("[")
-		for j := 0; j <= i; j++ {
-			if j > 0 {
-				b.WriteString(".")
-			}
-			b.WriteString("a")
-		}
-		b.WriteString("]\n")
-	}
-	b.WriteString("x = 1\n")
-	return b.String()
-}
-
-func deepXML(n int) string {
-	var b strings.Builder
-	for i := 0; i < n; i++ {
-		b.WriteString("<a>")
-	}
-	b.WriteString("x")
-	for i := 0; i < n; i++ {
-		b.WriteString("</a>")
-	}
-	return b.String()
-}
+// validate forwards to node.Validate. The facade's own tests assert the model
+// invariant on trees Parse returns, which is a facade-level contract even though
+// the rule itself lives in package node.
+func validate(n Node) error { return node.Validate(n) }
 
 // ordered reports whether format f preserves mapping key order semantically.
-func ordered(f Format) bool {
-	switch f {
-	case JSON, YAML, Python, JS:
-		return true
-	}
-	return false
-}
+func ordered(f Format) bool { return format.PreservesOrder(f) }
 
-// roundTrip encodes n to f, parses it back, and asserts deep equality.
+// allFormats lists every supported format, for tests that sweep all seven.
+var allFormats = format.All()
+
+// roundTrip encodes n to f, parses it back, and asserts deep equality. It stays
+// at the root because it goes through the facade's format-dispatching API.
 func roundTrip(t *testing.T, f Format, n Node) {
 	t.Helper()
 	text, err := Encode(n, f)
