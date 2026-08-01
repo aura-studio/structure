@@ -16,7 +16,7 @@ import (
 
 // yamlIntLike matches plain integer text; used to recover big integers that
 // yaml.v3 silently degraded to !!float (it caps integer resolution at uint64).
-var yamlIntLike = regexp.MustCompile(`^[-+]?[0-9]+$`)
+var yamlIntLike = regexp.MustCompile(`^[-+]?[0-9][0-9_]*$`)
 
 // parseYAML decodes a single YAML document into a Node tree via yaml.v3's
 // ordered yaml.Node API. Multi-document streams, aliases, anchors, merge keys
@@ -57,8 +57,14 @@ func parseYAML(input string) (Node, error) {
 
 // yamlToNode converts a yaml.Node subtree into the Node model.
 func yamlToNode(n *yaml.Node, depth int) (Node, error) {
-	if err := tooDeep(depth); err != nil {
-		return nil, err
+	// A scalar is a leaf, not a nesting level. Counting it made the effective
+	// YAML limit one level shallower than every other parser's: the same
+	// 10000-deep {"a":{"a":...1}} was accepted as JSON and rejected as YAML,
+	// because the innermost 1 was charged as level 10001.
+	if n.Kind != yaml.ScalarNode {
+		if err := tooDeep(depth); err != nil {
+			return nil, err
+		}
 	}
 	if n.Anchor != "" {
 		return nil, newParseError(YAML, n.Line, n.Column, "anchors are not supported")
@@ -158,8 +164,13 @@ func yamlScalarToNode(n *yaml.Node) (Node, error) {
 		// *big.Int (Requirement 7.2). Only do this for an *implicitly* resolved
 		// tag: `!!float 1` written by hand is a float and must stay one.
 		if n.Style&yaml.TaggedStyle == 0 && yamlIntLike.MatchString(n.Value) {
-			if b, ok := new(big.Int).SetString(n.Value, 10); ok {
-				return b, nil
+			// YAML 1.1 allows underscores as digit separators, and yaml.v3
+			// resolves 1_000 as the integer 1000, so they must be stripped here
+			// too or the separated spelling silently keeps the degraded float.
+			if b, ok := new(big.Int).SetString(strings.ReplaceAll(n.Value, "_", ""), 10); ok {
+				// Normalize back onto the int64 -> uint64 -> *big.Int ladder so a
+				// recovered value carries the same type as a directly parsed one.
+				return luaBigResult(b), nil
 			}
 		}
 		switch strings.ToLower(n.Value) {

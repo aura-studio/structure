@@ -53,6 +53,17 @@ type tomlReplay struct {
 	cursor map[string]int
 }
 
+// tomlCursorSeg and tomlCursorIdx encode one component of a cursor key. Every
+// component is length-prefixed (or colon-terminated) so the encoding is
+// injective. A naive "\x00"+seg / "#"+idx concatenation is not: element 0 of a
+// real [[a]] array and an ordinary quoted key "a#0" both produce "\x00a#0", so
+// the two unrelated nodes share one counter. The counter is then advanced by
+// the wrong occurrences, which silently drops leaf values (resolve skips an
+// index past the real element count) and grows phantom empty tables.
+func tomlCursorSeg(s string) string { return "s" + strconv.Itoa(len(s)) + ":" + s }
+
+func tomlCursorIdx(i int) string { return "i" + strconv.Itoa(i) + ":" }
+
 // apply replays one key path from MetaData.Keys().
 func (r *tomlReplay) apply(key []string) error {
 	val, owner, instance, found, err := r.resolve(key)
@@ -76,7 +87,7 @@ func (r *tomlReplay) apply(key []string) error {
 	case []map[string]any:
 		// Header array of tables: [[a]] shows up once per occurrence, so the
 		// cursor advances on every sighting after the first.
-		path := instance + "\x00" + leaf
+		path := instance + tomlCursorSeg(leaf)
 		if _, seen := r.cursor[path]; seen {
 			r.cursor[path]++
 		} else {
@@ -118,7 +129,7 @@ func (r *tomlReplay) resolve(key []string) (any, *OrderedMap, string, bool, erro
 		if !ok {
 			return nil, nil, "", false, nil
 		}
-		instance += "\x00" + seg
+		instance += tomlCursorSeg(seg)
 		elems, isArrayOfTables := next.([]map[string]any)
 		if !isArrayOfTables {
 			rawCur = next
@@ -130,7 +141,7 @@ func (r *tomlReplay) resolve(key []string) (any, *OrderedMap, string, bool, erro
 			return nil, nil, "", false, nil
 		}
 		rawCur = elems[idx]
-		instance += "#" + strconv.Itoa(idx)
+		instance += tomlCursorIdx(idx)
 		steps = append(steps, step{seg: seg, idx: idx})
 	}
 	m, ok := rawCur.(map[string]any)

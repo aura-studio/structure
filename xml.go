@@ -183,7 +183,13 @@ func encodeXML(n Node) (string, error) {
 	var buf bytes.Buffer
 	buf.WriteString(xml.Header)
 	enc := xml.NewEncoder(&buf)
-	enc.Indent("", "  ")
+	// Indentation is whitespace *inside* an element, so for mixed content (an
+	// element holding both #text and child elements) it becomes part of the text
+	// on the way back in. Round-trip fidelity outranks pretty output, so such a
+	// document is written unindented.
+	if !xmlHasMixedContent(content) {
+		enc.Indent("", "  ")
+	}
 	if err := writeXMLElement(enc, rootName, content); err != nil {
 		return "", err
 	}
@@ -272,6 +278,37 @@ func writeXMLElement(enc *xml.Encoder, name string, v Node) error {
 		}
 		return enc.EncodeToken(start.End())
 	}
+}
+
+// xmlHasMixedContent reports whether any element in the tree carries both text
+// and child elements. Encoding such a tree with indentation injects whitespace
+// that the parser then folds into #text, so the value would not round-trip.
+func xmlHasMixedContent(n Node) bool {
+	switch v := n.(type) {
+	case *OrderedMap:
+		_, hasText := v.Get("#text")
+		for k, cv := range v.All() {
+			if strings.HasPrefix(k, "@") {
+				continue
+			}
+			if k == "#text" {
+				continue
+			}
+			if hasText {
+				return true // text plus an element child
+			}
+			if xmlHasMixedContent(cv) {
+				return true
+			}
+		}
+	case []Node:
+		for _, e := range v {
+			if xmlHasMixedContent(e) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // xmlScalarString stringifies a scalar for XML text/attribute position.

@@ -594,10 +594,12 @@ func pyValidateNumberLit(lit string, base int) error {
 			return fmt.Errorf("invalid underscore placement in %q", lit)
 		}
 	}
-	// No leading zeros in decimal integers.
+	// No leading zeros in decimal integers — except an all-zero run, which
+	// CPython accepts: literal_eval("00") and ("0_000") are both 0, while "01"
+	// is a SyntaxError.
 	if base == 10 && !strings.ContainsAny(lit, ".eE") {
 		core := strings.ReplaceAll(lit, "_", "")
-		if len(core) > 1 && core[0] == '0' {
+		if len(core) > 1 && core[0] == '0' && strings.Trim(core, "0") != "" {
 			return fmt.Errorf("leading zeros are not permitted in %q", lit)
 		}
 	}

@@ -29,6 +29,59 @@ func TestYAMLDepthReturnsErrTooDeep(t *testing.T) {
 	}
 }
 
+// The YAML limit used to sit one level below everyone else's, because a scalar
+// leaf was charged as a nesting level: the very same document was accepted as
+// JSON and rejected as YAML. The comparison must use one text that is valid in
+// both formats, or the shapes differ and the asymmetry hides (a pure sequence
+// has no scalar leaf and never showed it).
+func TestYAMLDepthMatchesJSON(t *testing.T) {
+	for _, shape := range []struct {
+		name       string
+		open, leaf string
+		close      string
+	}{
+		{"mapping with scalar leaf", `{"a":`, "1", "}"},
+		{"sequence with scalar leaf", "[", "1", "]"},
+		{"sequence, empty leaf", "[", "", "]"},
+	} {
+		for _, d := range []int{maxDepth - 1, maxDepth, maxDepth + 1} {
+			input := strings.Repeat(shape.open, d) + shape.leaf + strings.Repeat(shape.close, d)
+			_, jsonErr := Parse(input, JSON)
+			_, yamlErr := Parse(input, YAML)
+			jsonDeep := errors.Is(jsonErr, ErrTooDeep)
+			yamlDeep := errors.Is(yamlErr, ErrTooDeep)
+			if jsonDeep != yamlDeep {
+				t.Errorf("%s at depth %d: JSON too-deep=%v but YAML too-deep=%v (json=%v, yaml=%v)",
+					shape.name, d, jsonDeep, yamlDeep, jsonErr, yamlErr)
+			}
+			if want := d > maxDepth; jsonDeep != want {
+				t.Errorf("%s at depth %d: too-deep=%v, want %v", shape.name, d, jsonDeep, want)
+			}
+		}
+	}
+}
+
+// yaml.v3 implements YAML 1.1 only and rejects a %YAML 1.2 directive. The
+// library deliberately surfaces that instead of stripping the directive and
+// parsing under 1.1 rules, which would silently change how y/no and 0o777-style
+// scalars resolve. Documented as a known limitation, so pin the behaviour.
+func TestYAMLVersionDirective(t *testing.T) {
+	if _, err := Parse("%YAML 1.1\n---\na: 1\n", YAML); err != nil {
+		t.Errorf("1.1 directive rejected: %v", err)
+	}
+	for _, in := range []string{"%YAML 1.2\n---\na: 1\n", "%YAML 1.3\n---\na: 1\n"} {
+		var pe *ParseError
+		_, err := Parse(in, YAML)
+		if !errors.As(err, &pe) {
+			t.Errorf("%q: want a *ParseError, got %T (%v)", in, err, err)
+			continue
+		}
+		if pe.Format != YAML {
+			t.Errorf("%q: Format = %v, want YAML", in, pe.Format)
+		}
+	}
+}
+
 // yaml.v3 picks a scalar style that silently loses data for three kinds of
 // string; the encoder must force double quotes for them.
 func TestYAMLStringStylesRoundTrip(t *testing.T) {
@@ -577,5 +630,136 @@ func TestUnsupportedFormatListsNames(t *testing.T) {
 	}
 	if _, eerr := Encode(om(), Format(999)); eerr == nil || !strings.Contains(eerr.Error(), "toml") {
 		t.Errorf("Encode unsupported format = %v, want a list including toml", eerr)
+	}
+}
+
+// The array-of-tables cursor key used to be built by concatenating "\x00"+seg
+// and "#"+index, which is not injective: element 0 of a real [[a]] array and an
+// ordinary quoted key "a#0" both encoded to "\x00a#0". The two unrelated nodes
+// then shared one counter, silently dropping leaf values and growing phantom
+// empty tables. No exotic input is required — "issue#0" is ordinary TOML.
+func TestTOMLCursorKeyIsInjective(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		input string
+		want  Node
+	}{
+		{
+			"quoted key collides with element 0",
+			"[[a]]\n[[a.b]]\nx = 1\n\n[\"a#0\"]\n[[\"a#0\".b]]\ny = 1\n",
+			om("a", arr(om("b", arr(om("x", int64(1))))),
+				"a#0", om("b", arr(om("y", int64(1))))),
+		},
+		{
+			"collision with two elements",
+			"[[a]]\n[[a.b]]\nx = 1\n\n[\"a#0\"]\n[[\"a#0\".b]]\ny = 1\n[[\"a#0\".b]]\ny = 2\n",
+			om("a", arr(om("b", arr(om("x", int64(1))))),
+				"a#0", om("b", arr(om("y", int64(1)), om("y", int64(2))))),
+		},
+		{
+			"realistic issue#0 key",
+			"[[issue]]\n[[issue.tag]]\nn = \"p\"\n\n[\"issue#0\"]\n[[\"issue#0\".tag]]\nn = \"q\"\n",
+			om("issue", arr(om("tag", arr(om("n", "p")))),
+				"issue#0", om("tag", arr(om("n", "q")))),
+		},
+		{
+			// Reversed source order: the damage used to land on the genuine array.
+			"reversed order",
+			"[\"a#0\"]\n[[\"a#0\".b]]\ny = 1\n\n[[a]]\n[[a.b]]\nx = 1\n",
+			om("a#0", om("b", arr(om("y", int64(1)))),
+				"a", arr(om("b", arr(om("x", int64(1)))))),
+		},
+	} {
+		got, err := parseTOML(tc.input)
+		if err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+			continue
+		}
+		if !nodeEqual(got, tc.want, false) {
+			t.Errorf("%s:\n got  %#v\n want %#v", tc.name, got, tc.want)
+		}
+	}
+	// The encoding itself must not let a segment merge with an index.
+	if tomlCursorSeg("a")+tomlCursorIdx(0) == tomlCursorSeg("a#0") {
+		t.Error("cursor encoding is not injective: seg+idx aliases a literal key")
+	}
+	if tomlCursorSeg("a")+tomlCursorSeg("b") == tomlCursorSeg("a\x00b") {
+		t.Error("cursor encoding is not injective: two segments alias a NUL key")
+	}
+	if tomlCursorSeg("a1")+tomlCursorIdx(2) == tomlCursorSeg("a")+tomlCursorIdx(12) {
+		t.Error("cursor encoding is not injective: digits merge with the index")
+	}
+}
+
+// Indentation is whitespace inside the element, so for mixed content it used to
+// be folded into #text on the way back in: {"#text":"hello"} re-parsed as
+// {"#text":"hello\n"}. Such documents are now emitted unindented.
+func TestXMLMixedContentRoundTrips(t *testing.T) {
+	for _, want := range []*OrderedMap{
+		om("root", om("#text", "hello", "child", "world")),
+		om("root", om("child", om("#text", "a", "g", "b"))),
+		om("root", om("@id", "7", "#text", "hello", "child", "world")),
+		om("root", om("list", arr(om("#text", "x", "e", "y"), om("#text", "z", "e", "w")))),
+	} {
+		out, err := Encode(want, XML)
+		if err != nil {
+			t.Errorf("encode %#v: %v", want, err)
+			continue
+		}
+		got, err := Parse(out, XML)
+		if err != nil {
+			t.Errorf("reparse %q: %v", out, err)
+			continue
+		}
+		if !nodeEqual(got, want, true) {
+			t.Errorf("mixed content did not round-trip\n encoded %q\n got     %#v\n want    %#v", out, got, want)
+		}
+	}
+	// Documents without mixed content stay indented.
+	out, err := Encode(om("root", om("a", "1")), XML)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if !strings.Contains(out, "\n  <a>") {
+		t.Errorf("non-mixed document lost its indentation: %q", out)
+	}
+}
+
+// Parse used to return bare sentinels for the whole-document rejections, so the
+// caller could not tell which format had failed. They are now *ParseError with
+// Format set, and errors.Is still reaches the sentinel.
+func TestParseSentinelsCarryFormat(t *testing.T) {
+	deep := strings.Repeat("[", maxDepth+1) + strings.Repeat("]", maxDepth+1)
+	for _, tc := range []struct {
+		name  string
+		f     Format
+		input string
+		want  error
+	}{
+		{"json scalar", JSON, "42", ErrTopLevelScalar},
+		{"yaml scalar", YAML, "42", ErrTopLevelScalar},
+		{"lua scalar", Lua, "42", ErrTopLevelScalar},
+		{"python scalar", Python, "42", ErrTopLevelScalar},
+		{"js scalar", JS, "42", ErrTopLevelScalar},
+		{"json deep", JSON, deep, ErrTooDeep},
+		{"yaml deep", YAML, deep, ErrTooDeep},
+		{"python deep", Python, deep, ErrTooDeep},
+	} {
+		_, err := Parse(tc.input, tc.f)
+		if !errors.Is(err, tc.want) {
+			t.Errorf("%s: errors.Is(%v, %v) = false", tc.name, err, tc.want)
+			continue
+		}
+		var pe *ParseError
+		if !errors.As(err, &pe) {
+			t.Errorf("%s: want a *ParseError, got %T (%v)", tc.name, err, err)
+			continue
+		}
+		if pe.Format != tc.f {
+			t.Errorf("%s: Format = %v, want %v", tc.name, pe.Format, tc.f)
+		}
+		if strings.Contains(pe.Msg, "structure: ") {
+			t.Errorf("%s: message keeps the redundant package prefix: %q", tc.name, pe.Msg)
+		}
 	}
 }

@@ -30,7 +30,9 @@
 package structure
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -42,23 +44,47 @@ func Parse(input string, f Format) (Node, error) {
 		line, col := xmlLineCol(input, int64(off))
 		return nil, newParseError(f, line, col, "input is not valid UTF-8")
 	}
+	var (
+		n   Node
+		err error
+	)
 	switch f {
 	case JSON:
-		return parseJSON(input)
+		n, err = parseJSON(input)
 	case XML:
-		return parseXML(input)
+		n, err = parseXML(input)
 	case YAML:
-		return parseYAML(input)
+		n, err = parseYAML(input)
 	case TOML:
-		return parseTOML(input)
+		n, err = parseTOML(input)
 	case Lua:
-		return parseLua(input)
+		n, err = parseLua(input)
 	case Python:
-		return parsePython(input)
+		n, err = parsePython(input)
 	case JS:
-		return parseJS(input)
+		n, err = parseJS(input)
+	default:
+		return nil, fmt.Errorf("structure: unsupported format %v (supported: %s)", f, formatList())
 	}
-	return nil, fmt.Errorf("structure: unsupported format %v (supported: %s)", f, formatList())
+	if err != nil {
+		return nil, parseErrorFor(f, err)
+	}
+	return n, nil
+}
+
+// parseErrorFor labels a parser failure with the format it came from. Parsers
+// return bare sentinels for the whole-document rejections (ErrTooDeep,
+// ErrTopLevelScalar) and plain errors for a few internal ones, none of which
+// tell the caller which format failed. Wrapping adds Format while leaving
+// errors.Is/errors.As intact through ParseError.Unwrap. The redundant
+// "structure: " prefix is dropped because ParseError.Error already prints
+// "parse <format>: ".
+func parseErrorFor(f Format, err error) error {
+	var pe *ParseError
+	if errors.As(err, &pe) {
+		return err
+	}
+	return wrapParseError(f, 0, 0, err, strings.TrimPrefix(err.Error(), "structure: "))
 }
 
 // Encode renders Node n as text in format f. The node is validated first

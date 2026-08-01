@@ -111,7 +111,7 @@ if errors.As(err, &pe) {
 | 单文本元素 | 只有 `#text` 一个键时塌缩成裸字符串 |
 | 注释 / PI / DOCTYPE | 解析时忽略 |
 | 单根 | 解析和编码都强制恰好一个根元素 |
-| 编码 | 输出 `<?xml ...?>` 声明 + 2 空格缩进；CDATA 只解码不编码 |
+| 编码 | 输出 `<?xml ...?>` 声明 + 2 空格缩进；混合内容元素（`#text` 与子元素并存）不缩进，因为缩进空白会被解析器折回 `#text`；CDATA 只解码不编码 |
 
 ```go
 node, _ := structure.Parse(`<user id="7"><name>Ada</name></user>`, structure.XML)
@@ -120,8 +120,8 @@ node, _ := structure.Parse(`<user id="7"><name>Ada</name></user>`, structure.XML
 
 ## 已知限制
 
-1. XML 值无类型（全字符串）；混合内容有损；命名空间仅保留 Local 名；CDATA 仅解码不编码。
-2. YAML 不保留注释、锚点、别名、合并键、多文档、自定义 tag、`!!binary`。
+1. XML 值无类型（全字符串）；命名空间仅保留 Local 名；CDATA 仅解码不编码。混合内容可以往返，代价是这类文档整篇不缩进（缩进是元素内部空白，会被解析器折进 `#text`）。
+2. YAML 不保留注释、锚点、别名、合并键、多文档、自定义 tag、`!!binary`。`%YAML 1.2` 指令被拒绝：yaml.v3 只实现 1.1，吞掉指令按 1.1 解析会静默改变 `y`/`no`、八进制等标量的含义，报错比静默降级安全。
 3. Lua 只支持纯数组表与纯字符串键字典表；按 Lua 5.3 词法解析，不保证 5.4 新语法。
 4. Python dict 键冻结为字符串；不支持 bytes / set / complex / Ellipsis / `\N{name}` / 隐式拼接。
 5. JS 输出即 JSON 文本（是合法的 JS 子集）；数字样键在真实 JS 引擎里会被重排（ECMA-262 §10.1.11.1 的运行时行为，非本库缺陷，生成文本仍按插入序）。
