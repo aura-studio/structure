@@ -8,7 +8,7 @@ out, err := structure.Convert(input, structure.JSON, structure.YAML)
 
 - 保序：映射键顺序在保序格式之间原样传递
 - 数字保真：`int64 → uint64 → *big.Int` 三级承载，2^53 以上整数不失精度
-- 原生 any 互通：`FromAny` / `ToAny` 与 `map[string]any` / `[]any` 双向转换（丢序，见下）
+- 原生 any 互通：`FromAny` / `ToAny` 与 `map[string]any` / `[]any` 双向转换，键序默认规范化、可选保真（见下）
 - 只解析不执行：Lua / Python / JavaScript 走纯字面量子集，AST 白名单解释，永不执行代码
 - 并发安全：无包级可变状态
 
@@ -83,15 +83,41 @@ out, err := structure.Encode(n, structure.YAML)
 // 解析后转回来
 n, err = structure.Parse(jsonText, structure.JSON)
 v := structure.ToAny(n) // => map[string]any
+
+// 输入里已有的 *OrderedMap 想按作者写的顺序出去
+n, err = structure.FromAny(cfg, structure.KeepOrder())
 ```
 
-`Parse` / `Encode` 的签名与行为**零改动**：`Encode` 依然拒绝裸 `map[string]any`，`Parse` 也依然只产出 `*OrderedMap`。转换是调用方在边界上显式做的一步，不是隐式强转——所以模型内部一个映射永远只有一种表示。
+`Parse` / `Encode` 的签名与行为**零改动**：`Encode` 依然拒绝裸 `map[string]any`，`Parse` 也依然只产出 `*OrderedMap`。转换是调用方在边界上显式做的一步，不是隐式强转——所以模型内部一个映射永远只有一种表示。下面的键序模式同样只作用于这一步：`Node` 树里映射始终是插入有序的 `*OrderedMap`，模式决定的是**往里装什么顺序**，不是模型有几种形态。
 
 - **整个 int / uint 族都收**（含无类型常量默认的 `int`），统一落到 `int64 → uint64 → *big.Int` 阶梯；`uint` 族一律经 `uint64`，不会出现 `int64(uint64(1<<63))` 静默变负
 - `json.Number` 收（配 `Decoder.UseNumber` 就能把 2^53 以上的整数原样带进来），`float32` 加宽为 `float64`
-- 输入里已有的 `*OrderedMap` **保留插入顺序**，只有本来无序的 Go map 才排序
+- **键序分两种模式**（下一节详述）：默认把每个映射的键都排序，`KeepOrder()` 让输入里已有的 `*OrderedMap` 保留插入顺序
 - 其余类型**按名字拒绝**：`map[any]any`、`map[string]string`、`[]string`、`[]byte`、数组、struct、指针、`time.Time`、`time.Duration`、`big.Float`、chan、func、complex，以及任何具名类型。刻意不设 `fmt.Stringer` / `error` 兜底——这些类型全都有 `String()`，兜底会把 `1<<100` 从正确的整数静默变成带引号的字符串，还能通过 `Validate`
 - 输入不必是容器：转换器不管根形状，`FromAny(42)` 得到 `int64(42)`，顶层标量的拒绝仍由 `Validate` / `Encode` 负责。UTF-8 校验同理
+
+#### 键序：两种模式
+
+Go 的 map 没有顺序，所以 `FromAny` 必须替它定一个——用 `sort.Strings` 而不是裸 `range`：六个编码器里五个严格按插入序输出，裸 `range` 会让同一个程序两次运行的输出不一样。这一条**两种模式下都不变**，没有选项能关掉。
+
+真正有得选的是输入里已有的 `*OrderedMap`，它本来就带着顺序：
+
+| 调用 | 输入里的 `*OrderedMap` | 输入里的 Go map | 适用场景 |
+|---|---|---|---|
+| `FromAny(v)` | 排序 | 排序 | **规范化**：等价数据不论来源都转成同一份文本 |
+| `FromAny(v, KeepOrder())` | 保留插入序 | 排序 | **保真**：输入的顺序本身是信息，比如重写一份手写配置 |
+
+`KeepOrder()` 只保顺序，不发明顺序——Go map 没有顺序可保，所以两种模式下一样排序。规则**逐层生效**而非逐次调用：`KeepOrder()` 下一个 `*OrderedMap` 里套着 Go map，外层保序、内层照样排序。
+
+两种模式都**不保证顺序能落到文本**：TOML 表内顺序与 Lua 哈希顺序在各自规范里没有意义，这两个编码器可能重排键，无论 Node 里装的是什么。哪些格式真把顺序带过去，以 `format.PreservesOrder` 为准，别另记一份清单。
+
+`ToAny` 方向只有对称的签名，没有对称的能力：Go map 装不住顺序，所以 `KeepOrder()` 在这边的含义是「不转换映射」，也就只剩深拷贝一次——对任何合法 Node 都与 `node.Clone` 的结果相同，实现上就是直接委派给它。**要顺序就别走 `ToAny`**：
+
+```go
+structure.Encode(n, structure.JSON) // 有序
+json.Marshal(n)                     // 有序（*OrderedMap 自带 MarshalJSON）
+json.Marshal(structure.ToAny(n))    // 无序——Go map 把顺序丢了
+```
 
 ### Node 模型
 
@@ -167,7 +193,7 @@ if errors.As(err, &pe) {
 9. 保序只对 JSON / YAML / Python / JS 有语义保证。TOML 表内顺序、Lua 哈希顺序在各自规范里都无意义，本库输出确定但不承诺与输入一致。
 10. 输入输出一律要求合法 UTF-8，不支持其他编码，也不为野字节提供逃逸表示。需要处理二进制请先自行转成 base64 等文本形式。
 11. 不含 XML。XML 的数据模型（属性、混合内容、单根、值无类型）与这里的 Node 模型不同构，硬塞进来只能靠 `@attr`/`#text` 这类约定，往返语义不干净，故整包移除。
-12. `FromAny` / `ToAny` 一律丢映射顺序，因为 Go 的 map 装不住顺序。`ToAny` 方向无从补救（要顺序就留着 `Node`）；`FromAny` 方向用 `sort.Strings` 换来确定性——六个编码器里五个严格按插入序输出，裸 `range` 一个 Go map 会让同一个程序两次运行的输出不一样。
+12. Go 的 map 装不住顺序，所以 `FromAny` 对它一律 `sort.Strings` 换确定性（`KeepOrder()` 也不例外），`ToAny` 方向则无从补救——要顺序就别转成原生 map，`Encode` 与 `json.Marshal` 都直接吃 `Node`。`KeepOrder()` 能保下的只有输入里已有的 `*OrderedMap`，且这层顺序仍可能被 TOML / Lua 编码器丢掉（见第 9 条）。
 13. `FromAny` 的输入必须是树。自引用环会撞上 `MaxDepth` 变成可恢复的 `ErrTooDeep`，但**共享的无环子树（DAG）不去重**：每个引用都会被展开，60 层同一个子树出现两次就是 2^60 条路径。有共享结构请自己先去重。
 
 ## 测试
@@ -189,7 +215,8 @@ go test -bench=. ./...     # 基准
 - **Round-trip**：每格式 `Parse(Encode(n))` 深等值。比较器 `nodeEqual` 对保序格式逐位置比键，对无序格式只比键值；浮点按位比较且 NaN==NaN；整数跨 `int64`/`uint64`/`*big.Int` 承载做数值比较。
 - **等价链**：`JSON→YAML→TOML→JSON ≡ JSON→TOML→JSON`；另有 `JSON→Lua→JSON` 一条，用无序比较验证丢序格式仍然保值。
 - **错误面**：每格式的非法语法、顶层标量、超深（10001 层 → `ErrTooDeep`，1000 层通过）、重复键，以及各格式特有的拒绝项。
-- **原生 any 转换**：逐类型钉承载（不只比数值——`uint` 落 `int64` 或 `int` 落 `float64` 都会数值相等而破坏阶梯）、拒绝清单逐类型、深度边界 10000/10001、自引用环与相互引用、不改动调用方输入、排序在 50 次重复下稳定（Go 随机化 map 遍历，未排序的实现几次内就会红）。门面侧另测转换结果能喂给全部六个编码器，以及 `ToAny` 输出能过 `json.Marshal`。
+- **原生 any 转换**：逐类型钉承载（不只比数值——`uint` 落 `int64` 或 `int` 落 `float64` 都会数值相等而破坏阶梯）、拒绝清单逐类型、深度边界 10000/10001、自引用环与相互引用、不改动调用方输入。门面侧另测转换结果能喂给全部六个编码器，以及 `ToAny` 输出能过 `json.Marshal`。
+- **键序两模式**：模式 × 结构矩阵（纯 Go map／纯 `*OrderedMap`／两种互相嵌套／数组内含映射／空映射／空字符串键／深层嵌套）每格两种模式各验一次，期望值写成整棵树的 JSON 文本——`*OrderedMap` 自带的 `MarshalJSON` 按插入序输出，一个字符串就把每一层的键序钉住。两种模式各跑 50 次重复确认键序恒定（Go 随机化 map 遍历，未排序的实现几次内就会红），`ToAny(n, KeepOrder())` 与 `Clone(n)` 用有序比较对齐并单独验 `*big.Int` 真被拷贝，另有 8 goroutine 混跑两种模式的 `-race` 用例钉住「模式是值不是状态」。
 - **Fuzz**：`FuzzParse`（断言永不 panic、根必为容器、返回的 Node 通过 `validate`）与 `FuzzRoundTrip`（Encode→Parse→深等值）；`tests/testdata/fuzz/FuzzParse/` 每格式 ≥3 条真实种子（语料按包目录定位，所以它跟着测试一起放在 `tests/` 下）。种子的第一个字节是格式选择器，按 `Format` 序数索引，所以序数只增不改（移除 XML 时做过一次紧凑重排，语料在同一个提交里同步改了选择字节；`format` 包有测试把序数钉死）。
 - **Benchmark**：各格式 Parse/Encode 与代表性 Convert 路径，`b.Loop()` + `ReportAllocs` + `SetBytes`。
 

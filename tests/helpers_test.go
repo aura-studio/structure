@@ -24,6 +24,7 @@ import (
 type (
 	Node       = structure.Node
 	OrderedMap = structure.OrderedMap
+	Option     = structure.Option
 	Format     = structure.Format
 	ParseError = structure.ParseError
 )
@@ -51,8 +52,12 @@ func Convert(in string, from, to Format) (string, error) {
 }
 func ParseFormat(s string) (Format, error) { return structure.ParseFormat(s) }
 func NewOrderedMap() *OrderedMap           { return structure.NewOrderedMap() }
-func FromAny(v any) (Node, error)          { return structure.FromAny(v) }
-func ToAny(n Node) any                     { return structure.ToAny(n) }
+func KeepOrder() Option                    { return structure.KeepOrder() }
+
+// FromAny and ToAny take the option list through, or these forwarders would hide
+// the mode axis from every test in this package.
+func FromAny(v any, opts ...Option) (Node, error) { return structure.FromAny(v, opts...) }
+func ToAny(n Node, opts ...Option) any            { return structure.ToAny(n, opts...) }
 
 // maxDepth mirrors node.MaxDepth for the tests that probe the limit.
 const maxDepth = node.MaxDepth

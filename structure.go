@@ -80,6 +80,16 @@ type OrderedMap = node.OrderedMap
 // NewOrderedMap returns an empty OrderedMap ready for use.
 func NewOrderedMap() *OrderedMap { return node.NewOrderedMap() }
 
+// Option configures a [FromAny] or [ToAny] call. It is an alias for
+// [node.Option], so an Option from either package works with either spelling of
+// the functions.
+type Option = node.Option
+
+// KeepOrder makes a conversion preserve the insertion order of an *OrderedMap
+// present in the input rather than sorting its keys. A Go map's keys are sorted
+// in both modes, since it has no order to keep. It forwards to [node.KeepOrder].
+func KeepOrder() Option { return node.KeepOrder() }
+
 // FromAny converts a plain Go value tree — map[string]any and []any all the way
 // down, the shape json.Unmarshal produces — into a Node suitable for Encode:
 //
@@ -93,18 +103,26 @@ func NewOrderedMap() *OrderedMap { return node.NewOrderedMap() }
 // (typed maps and slices, structs, time.Time, anything else) are rejected by
 // name instead of being guessed at.
 //
-// Because a Go map has no order, mapping keys are sorted; an *OrderedMap already
-// in the input keeps its insertion order. It forwards to [node.FromAny].
-func FromAny(v any) (Node, error) { return node.FromAny(v) }
+// By default every mapping's keys come out sorted — the only deterministic order
+// available for a Go map, and applied to an *OrderedMap in the input as well, so
+// that equivalent data converts to identical text whatever its source.
+// [KeepOrder] keeps such an *OrderedMap in its insertion order instead. Either
+// way TOML and Lua may still reorder keys on the way out; see
+// [format.PreservesOrder]. It forwards to [node.FromAny].
+func FromAny(v any, opts ...Option) (Node, error) { return node.FromAny(v, opts...) }
 
 // ToAny converts a Node tree into plain Go values — *OrderedMap becomes
 // map[string]any, []Node becomes []any — for handing to encoding/json, a
 // template, or anything else reflecting over native containers.
 //
 // Mapping order is lost, since a Go map cannot hold it. Keep the Node if order
-// matters. n must be valid (Parse output always is). It forwards to
+// matters: [Encode] takes one directly, and so does json.Marshal.
+// [KeepOrder] leaves the mappings as *OrderedMap, which makes the call a deep
+// copy and nothing more — the same result as [node.Clone] for any valid Node. It
+// is accepted for symmetry with [FromAny], not because an ordered Go map is
+// possible. n must be valid (Parse output always is). It forwards to
 // [node.ToAny].
-func ToAny(n Node) any { return node.ToAny(n) }
+func ToAny(n Node, opts ...Option) any { return node.ToAny(n, opts...) }
 
 // Format identifies one of the six supported data formats. It is an alias for
 // [format.Format].

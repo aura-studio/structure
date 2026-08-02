@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unsafe"
@@ -186,12 +187,33 @@ func TestFromAnyMapKeysAreSorted(t *testing.T) {
 	}
 }
 
-// Sorting applies only to values that never had an order. An *OrderedMap in the
-// input is a mapping that does, so it keeps its insertion order — the documented
-// boundary of the "converting to any gives up order" trade.
-func TestFromAnyKeepsOrderedMapOrder(t *testing.T) {
+// The default mode sorts every mapping, an *OrderedMap in the input included.
+// Canonicalization is the whole point: equivalent data must convert to identical
+// text whatever its source, and a mapping that arrived already ordered would
+// otherwise leak that order into the output.
+func TestFromAnyDefaultSortsEvenOrderedMaps(t *testing.T) {
 	in := nodetest.OM("zebra", int64(1), "apple", int64(2), "mango", int64(3))
 	got, err := node.FromAny(in)
+	if err != nil {
+		t.Fatalf("FromAny: %v", err)
+	}
+	want := []string{"apple", "mango", "zebra"}
+	if keys := got.(*node.OrderedMap).Keys(); !reflect.DeepEqual(keys, want) {
+		t.Errorf("keys = %q, want %q (sorted, not insertion order)", keys, want)
+	}
+	// Sorting reads the input's keys but must not reorder it: Keys hands back a
+	// fresh slice, and sorting that slice cannot reach the caller's map.
+	if keys := in.Keys(); !reflect.DeepEqual(keys, []string{"zebra", "apple", "mango"}) {
+		t.Errorf("input *OrderedMap reordered to %q", keys)
+	}
+}
+
+// KeepOrder is the other half of the trade: a mapping that already carries an
+// order keeps it, while a Go map — which has none to keep — is still sorted. The
+// option preserves order, it does not invent one.
+func TestFromAnyKeepOrderPreservesOrderedMapButSortsGoMaps(t *testing.T) {
+	in := nodetest.OM("zebra", int64(1), "apple", int64(2), "mango", int64(3))
+	got, err := node.FromAny(in, node.KeepOrder())
 	if err != nil {
 		t.Fatalf("FromAny: %v", err)
 	}
@@ -199,13 +221,10 @@ func TestFromAnyKeepsOrderedMapOrder(t *testing.T) {
 	if keys := got.(*node.OrderedMap).Keys(); !reflect.DeepEqual(keys, want) {
 		t.Errorf("keys = %q, want %q (insertion order, not sorted)", keys, want)
 	}
-	// A fresh map, not the input: nothing the caller holds is shared.
-	if got == node.Node(in) {
-		t.Error("FromAny returned the input *OrderedMap instead of a copy")
-	}
-	// Native containers nested inside an *OrderedMap still get converted.
+	// A Go map nested inside an ordered one still sorts, so the two rules apply
+	// per level rather than per call.
 	in2 := nodetest.OM("m", map[string]any{"b": 1, "a": 2})
-	got2, err := node.FromAny(in2)
+	got2, err := node.FromAny(in2, node.KeepOrder())
 	if err != nil {
 		t.Fatalf("FromAny: %v", err)
 	}
@@ -215,7 +234,182 @@ func TestFromAnyKeepsOrderedMapOrder(t *testing.T) {
 		t.Fatalf("nested value = %T, want *node.OrderedMap", nested)
 	}
 	if keys := m.Keys(); !reflect.DeepEqual(keys, []string{"a", "b"}) {
-		t.Errorf("nested keys = %q, want sorted", keys)
+		t.Errorf("nested Go map keys = %q, want sorted even under KeepOrder", keys)
+	}
+}
+
+// Two guarantees are mode-independent, so they are asserted in both: the result
+// never aliases the input, and a native container nested inside an *OrderedMap is
+// converted rather than carried through as an illegal carrier.
+func TestFromAnyOrderedMapInvariantsHoldInBothModes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts []node.Option
+	}{
+		{"default", nil},
+		{"keeporder", []node.Option{node.KeepOrder()}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := nodetest.OM("zebra", int64(1), "apple", int64(2))
+			got, err := node.FromAny(in, tc.opts...)
+			if err != nil {
+				t.Fatalf("FromAny: %v", err)
+			}
+			// A fresh map, not the input: nothing the caller holds is shared.
+			if got == node.Node(in) {
+				t.Error("FromAny returned the input *OrderedMap instead of a copy")
+			}
+
+			in2 := nodetest.OM("m", map[string]any{"b": 1, "a": 2})
+			got2, err := node.FromAny(in2, tc.opts...)
+			if err != nil {
+				t.Fatalf("FromAny: %v", err)
+			}
+			nested, _ := got2.(*node.OrderedMap).Get("m")
+			m, ok := nested.(*node.OrderedMap)
+			if !ok {
+				t.Fatalf("nested value = %T, want *node.OrderedMap", nested)
+			}
+			if keys := m.Keys(); !reflect.DeepEqual(keys, []string{"a", "b"}) {
+				t.Errorf("nested keys = %q, want sorted", keys)
+			}
+		})
+	}
+}
+
+// jsonOf renders a Node as JSON. It is the most compact whole-tree,
+// order-sensitive expectation available: OrderedMap.MarshalJSON emits insertion
+// order, so one string pins every level's key sequence at once — which is exactly
+// what the mode axis changes.
+func jsonOf(t *testing.T, n node.Node) string {
+	t.Helper()
+	b, err := json.Marshal(n)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	return string(b)
+}
+
+// The mode is one axis and the input's shape is the other, so the contract is a
+// matrix rather than a pair of examples. Two rules cover every cell: a Go map
+// sorts in both modes because it has no order to keep, and an *OrderedMap sorts
+// by default but keeps its own order under KeepOrder. They apply per level, so a
+// mixed tree exercises both at once.
+func TestFromAnyModeStructureMatrix(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		in          any
+		wantDefault string
+		wantKeep    string
+	}{
+		{
+			name:        "go map",
+			in:          map[string]any{"z": int64(1), "a": int64(2)},
+			wantDefault: `{"a":2,"z":1}`,
+			wantKeep:    `{"a":2,"z":1}`,
+		},
+		{
+			name:        "ordered map",
+			in:          nodetest.OM("z", int64(1), "a", int64(2)),
+			wantDefault: `{"a":2,"z":1}`,
+			wantKeep:    `{"z":1,"a":2}`,
+		},
+		{
+			name:        "go map holding ordered map",
+			in:          map[string]any{"m": nodetest.OM("z", int64(1), "a", int64(2)), "k": int64(0)},
+			wantDefault: `{"k":0,"m":{"a":2,"z":1}}`,
+			wantKeep:    `{"k":0,"m":{"z":1,"a":2}}`,
+		},
+		{
+			name:        "ordered map holding go map",
+			in:          nodetest.OM("m", map[string]any{"z": int64(1), "a": int64(2)}, "k", int64(0)),
+			wantDefault: `{"k":0,"m":{"a":2,"z":1}}`,
+			wantKeep:    `{"m":{"a":2,"z":1},"k":0}`,
+		},
+		{
+			name: "array of mappings",
+			in: []any{
+				nodetest.OM("z", int64(1), "a", int64(2)),
+				map[string]any{"y": int64(3), "b": int64(4)},
+			},
+			wantDefault: `[{"a":2,"z":1},{"b":4,"y":3}]`,
+			wantKeep:    `[{"z":1,"a":2},{"b":4,"y":3}]`,
+		},
+		{
+			name:        "empty mappings",
+			in:          map[string]any{"om": nodetest.OM(), "gm": map[string]any{}},
+			wantDefault: `{"gm":{},"om":{}}`,
+			wantKeep:    `{"gm":{},"om":{}}`,
+		},
+		{
+			// "" sorts before everything, so listing it last is what makes the two
+			// modes distinguishable here.
+			name:        "empty string key",
+			in:          nodetest.OM("a", int64(1), "", int64(0)),
+			wantDefault: `{"":0,"a":1}`,
+			wantKeep:    `{"a":1,"":0}`,
+		},
+		{
+			name: "deep nesting",
+			in: nodetest.OM(
+				"z", nodetest.OM("y", nodetest.OM("x", int64(1), "w", int64(2)), "v", int64(3)),
+				"u", int64(4),
+			),
+			wantDefault: `{"u":4,"z":{"v":3,"y":{"w":2,"x":1}}}`,
+			wantKeep:    `{"z":{"y":{"x":1,"w":2},"v":3},"u":4}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gotDefault, err := node.FromAny(tc.in)
+			if err != nil {
+				t.Fatalf("FromAny: %v", err)
+			}
+			if got := jsonOf(t, gotDefault); got != tc.wantDefault {
+				t.Errorf("default mode = %s, want %s", got, tc.wantDefault)
+			}
+
+			gotKeep, err := node.FromAny(tc.in, node.KeepOrder())
+			if err != nil {
+				t.Fatalf("FromAny(KeepOrder): %v", err)
+			}
+			if got := jsonOf(t, gotKeep); got != tc.wantKeep {
+				t.Errorf("KeepOrder mode = %s, want %s", got, tc.wantKeep)
+			}
+		})
+	}
+}
+
+// Both modes must be deterministic, which is the point of the feature: KeepOrder
+// relaxes canonicalization for mappings that carry an order, not for Go maps. The
+// repetition is what catches a bare range — Go randomizes map iteration, so an
+// implementation that forgot to sort fails within a few attempts.
+func TestFromAnyKeyOrderIsDeterministicInBothModes(t *testing.T) {
+	in := map[string]any{
+		"delta": int64(4),
+		"alpha": int64(1),
+		"cfg":   nodetest.OM("zebra", int64(1), "apple", int64(2), "mango", int64(3)),
+	}
+	const (
+		wantDefault = `{"alpha":1,"cfg":{"apple":2,"mango":3,"zebra":1},"delta":4}`
+		wantKeep    = `{"alpha":1,"cfg":{"zebra":1,"apple":2,"mango":3},"delta":4}`
+	)
+
+	for i := 0; i < 50; i++ {
+		gotDefault, err := node.FromAny(in)
+		if err != nil {
+			t.Fatalf("attempt %d: FromAny: %v", i, err)
+		}
+		if got := jsonOf(t, gotDefault); got != wantDefault {
+			t.Fatalf("attempt %d: default mode = %s, want %s", i, got, wantDefault)
+		}
+
+		gotKeep, err := node.FromAny(in, node.KeepOrder())
+		if err != nil {
+			t.Fatalf("attempt %d: FromAny(KeepOrder): %v", i, err)
+		}
+		if got := jsonOf(t, gotKeep); got != wantKeep {
+			t.Fatalf("attempt %d: KeepOrder mode = %s, want %s", i, got, wantKeep)
+		}
 	}
 }
 
@@ -527,4 +721,100 @@ func TestFromAnyToAnyRoundTrip(t *testing.T) {
 	if !node.Equal(n, back, false) {
 		t.Error("unordered comparison failed; values were not preserved")
 	}
+}
+
+// ToAny under KeepOrder is a deep copy and nothing else, because there is no
+// ordered Go map for it to build. The option exists for symmetry with FromAny, so
+// the honest contract is equivalence with Clone — asserted with the ORDERED
+// comparison, since an unordered one would pass even if the order were dropped.
+func TestToAnyKeepOrderEqualsClone(t *testing.T) {
+	for name, n := range map[string]node.Node{
+		"rich":     nodetest.RichMap(),
+		"array":    nodetest.Array(),
+		"deep":     nodetest.DeepMaps(50),
+		"unsorted": nodetest.OM("zebra", int64(1), "apple", int64(2)),
+	} {
+		got := node.ToAny(n, node.KeepOrder())
+		if !node.Equal(got, node.Clone(n), true) {
+			t.Errorf("%s: ToAny(n, KeepOrder()) != Clone(n)", name)
+		}
+		// Equivalence to Clone means order survives, which is what separates this
+		// from the default mode.
+		if !node.Equal(got, n, true) {
+			t.Errorf("%s: ToAny(n, KeepOrder()) lost order relative to n", name)
+		}
+	}
+
+	// Deep, not shallow: the mappings are new objects, and the one mutable scalar
+	// carrier is copied too. *big.Int is the only Node type a caller could mutate
+	// through a shared pointer, so it is the whole reason this is Clone's job
+	// rather than a cast.
+	big1 := big.NewInt(1)
+	big1.Lsh(big1, 100)
+	in := nodetest.OM("n", big1)
+	got := node.ToAny(in, node.KeepOrder())
+	if got == node.Node(in) {
+		t.Fatal("ToAny(n, KeepOrder()) returned the input mapping itself")
+	}
+	copied, _ := got.(*node.OrderedMap).Get("n")
+	if copied.(*big.Int) == big1 {
+		t.Error("*big.Int was shared with the input rather than copied")
+	}
+	if copied.(*big.Int).Cmp(big1) != 0 {
+		t.Errorf("copied *big.Int = %v, want %v", copied, big1)
+	}
+
+	// The default mode still converts, so the option is doing the work rather than
+	// the tree happening to be native already.
+	native := node.ToAny(in)
+	if _, ok := native.(map[string]any); !ok {
+		t.Errorf("default ToAny = %T, want map[string]any", native)
+	}
+}
+
+// No package-level state backs the mode, so concurrent conversions in different
+// modes cannot interfere: an Option is a value the caller folds into a local
+// options struct per call. Run under -race, this is the assertion that says so.
+func TestFromAnyToAnyConcurrentInBothModes(t *testing.T) {
+	// One shared input, read by every goroutine. FromAny does not write to its
+	// argument, so sharing it is part of what is being tested.
+	in := map[string]any{
+		"cfg":   nodetest.OM("zebra", int64(1), "apple", int64(2)),
+		"alpha": int64(1),
+	}
+	tree := nodetest.RichMap()
+
+	const goroutines = 8
+	var wg sync.WaitGroup
+	for i := 0; i < goroutines; i++ {
+		keepOrder := i%2 == 0
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var opts []node.Option
+			want := `{"alpha":1,"cfg":{"apple":2,"zebra":1}}`
+			if keepOrder {
+				opts = []node.Option{node.KeepOrder()}
+				want = `{"alpha":1,"cfg":{"zebra":1,"apple":2}}`
+			}
+			for j := 0; j < 50; j++ {
+				got, err := node.FromAny(in, opts...)
+				if err != nil {
+					t.Errorf("FromAny: %v", err)
+					return
+				}
+				b, err := json.Marshal(got)
+				if err != nil {
+					t.Errorf("json.Marshal: %v", err)
+					return
+				}
+				if string(b) != want {
+					t.Errorf("keepOrder=%v: got %s, want %s", keepOrder, b, want)
+					return
+				}
+				node.ToAny(tree, opts...)
+			}
+		}()
+	}
+	wg.Wait()
 }

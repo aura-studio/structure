@@ -165,6 +165,80 @@ func TestFromAnyPreservesBigIntegersFromEncodingJSON(t *testing.T) {
 	}
 }
 
+// Whether KeepOrder reaches the TEXT is a question only the facade can answer:
+// package node owns the option but cannot see the encoders. This also pins where
+// the promise stops — TOML and Lua give table order no meaning, and
+// format.PreservesOrder is the single source of truth for which formats carry it
+// through, so the expectation is derived from it rather than from a second list.
+func TestKeepOrderReachesEncodedText(t *testing.T) {
+	// Insertion order differs from sorted order, so the two modes are
+	// distinguishable. Without that, a forwarder that dropped the option would
+	// still pass.
+	in := map[string]any{"cfg": om("zebra", int64(1), "apple", int64(2))}
+
+	def, err := FromAny(in)
+	if err != nil {
+		t.Fatalf("FromAny: %v", err)
+	}
+	keep, err := FromAny(in, KeepOrder())
+	if err != nil {
+		t.Fatalf("FromAny(KeepOrder): %v", err)
+	}
+
+	for _, f := range allFormats {
+		defText, err := Encode(def, f)
+		if err != nil {
+			t.Fatalf("Encode(%s) default: %v", f, err)
+		}
+		keepText, err := Encode(keep, f)
+		if err != nil {
+			t.Fatalf("Encode(%s) KeepOrder: %v", f, err)
+		}
+
+		// In an order-preserving format the two modes must produce different
+		// text, which is the whole feature. In TOML and Lua they need not, and
+		// nothing here demands they do.
+		if ordered(f) && defText == keepText {
+			t.Errorf("%s: KeepOrder produced the same text as the default:\n%s", f, keepText)
+		}
+
+		// Either way values survive the trip, compared with the key-order rule
+		// that format actually claims.
+		back, err := Parse(keepText, f)
+		if err != nil {
+			t.Fatalf("Parse(%s) of KeepOrder output: %v\n%s", f, err, keepText)
+		}
+		if !nodeEqual(keep, back, ordered(f)) {
+			t.Errorf("%s: KeepOrder round trip changed values:\n%s", f, keepText)
+		}
+	}
+}
+
+// The option reaches ToAny through the facade too. It cannot produce an ordered
+// Go map — nothing can — so what it does here is leave the mappings alone, which
+// is observable as the carrier type of the result.
+func TestFacadeToAnyForwardsKeepOrder(t *testing.T) {
+	n, err := FromAny(map[string]any{"cfg": om("zebra", int64(1), "apple", int64(2))}, KeepOrder())
+	if err != nil {
+		t.Fatalf("FromAny: %v", err)
+	}
+
+	if _, ok := ToAny(n).(map[string]any); !ok {
+		t.Errorf("ToAny default = %T, want map[string]any", ToAny(n))
+	}
+	kept := ToAny(n, KeepOrder())
+	if _, ok := kept.(*OrderedMap); !ok {
+		t.Fatalf("ToAny(KeepOrder) = %T, want *OrderedMap", kept)
+	}
+	// A deep copy and nothing more: order intact, and not the input itself.
+	if !nodeEqual(kept, n, true) {
+		t.Error("ToAny(n, KeepOrder()) is not equal to n with order compared")
+	}
+	if kept == n {
+		t.Error("ToAny(n, KeepOrder()) returned the input tree rather than a copy")
+	}
+}
+
 // Conversion is an explicit step, not something Parse or Encode does for you.
 // These two assertions are the boundary: adding native-container support to the
 // codecs would silently make FromAny optional and both of these would fail.
