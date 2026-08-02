@@ -80,6 +80,32 @@ type OrderedMap = node.OrderedMap
 // NewOrderedMap returns an empty OrderedMap ready for use.
 func NewOrderedMap() *OrderedMap { return node.NewOrderedMap() }
 
+// FromAny converts a plain Go value tree — map[string]any and []any all the way
+// down, the shape json.Unmarshal produces — into a Node suitable for Encode:
+//
+//	n, err := structure.FromAny(map[string]any{"a": 1})
+//	out, err := structure.Encode(n, structure.YAML)
+//
+// Parse and Encode are unaffected: Encode still rejects a bare map[string]any,
+// so conversion is an explicit step at the boundary rather than an implicit
+// coercion. int and the whole int/uint family land on the int64 -> uint64 ->
+// *big.Int ladder, json.Number keeps full precision, and unsupported types
+// (typed maps and slices, structs, time.Time, anything else) are rejected by
+// name instead of being guessed at.
+//
+// Because a Go map has no order, mapping keys are sorted; an *OrderedMap already
+// in the input keeps its insertion order. It forwards to [node.FromAny].
+func FromAny(v any) (Node, error) { return node.FromAny(v) }
+
+// ToAny converts a Node tree into plain Go values — *OrderedMap becomes
+// map[string]any, []Node becomes []any — for handing to encoding/json, a
+// template, or anything else reflecting over native containers.
+//
+// Mapping order is lost, since a Go map cannot hold it. Keep the Node if order
+// matters. n must be valid (Parse output always is). It forwards to
+// [node.ToAny].
+func ToAny(n Node) any { return node.ToAny(n) }
+
 // Format identifies one of the six supported data formats. It is an alias for
 // [format.Format].
 type Format = format.Format

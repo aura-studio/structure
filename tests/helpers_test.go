@@ -51,6 +51,8 @@ func Convert(in string, from, to Format) (string, error) {
 }
 func ParseFormat(s string) (Format, error) { return structure.ParseFormat(s) }
 func NewOrderedMap() *OrderedMap           { return structure.NewOrderedMap() }
+func FromAny(v any) (Node, error)          { return structure.FromAny(v) }
+func ToAny(n Node) any                     { return structure.ToAny(n) }
 
 // maxDepth mirrors node.MaxDepth for the tests that probe the limit.
 const maxDepth = node.MaxDepth
